@@ -287,6 +287,30 @@ def _column_runs(img: Image.Image, bbox: tuple[int, int, int, int], threshold: i
     return runs
 
 
+def _run_tesseract(image: Image.Image, config: str) -> str:
+    """pytesseract.image_to_string, made resilient to a transient
+    infrastructure failure observed live after several hundred rapid
+    sequential OCR calls in one run: tesseract writes its result to a
+    temp file, and pytesseract's very next step reads it straight back --
+    if that file is already gone by then (observed:
+    FileNotFoundError on a '/var/folders/.../tess_XXXXXXXX.txt' pytesseract
+    itself had just asked tesseract to create, with no indication of what
+    removed it), that's not a content-recognition failure, it's
+    tesseract/pytesseract's own subprocess plumbing hiccuping -- likely
+    exposed by how much faster/more frequent these calls became once the
+    template-match fast path and shorter timings landed. Treating it the
+    same as "no text found" (empty string, the same thing a genuinely
+    blank crop already produces) lets it flow into the retry logic that
+    already handles a row that's transiently unparseable for any other
+    reason (state_machine._read_page_rows), instead of crashing the whole
+    run over what's very likely a one-off.
+    """
+    try:
+        return pytesseract.image_to_string(image, config=config).strip()
+    except (OSError, pytesseract.pytesseract.TesseractError):
+        return ""
+
+
 def _ocr_content(img: Image.Image, config: str, upscale: int = UPSCALE) -> tuple[str, tuple[int, int, int, int] | None]:
     """Auto-crop img to its bright-pixel content (padded), upscale, and OCR
     it. Returns (text, bbox_in_img) -- bbox is None if img was blank.
@@ -296,7 +320,7 @@ def _ocr_content(img: Image.Image, config: str, upscale: int = UPSCALE) -> tuple
         return "", None
     padded = _pad_bbox(bbox, img)
     content = img.crop(padded)
-    text = pytesseract.image_to_string(_upscale(content, upscale), config=config).strip()
+    text = _run_tesseract(_upscale(content, upscale), config)
     return text, bbox
 
 
@@ -330,9 +354,7 @@ def _ocr_single_digit(img: Image.Image) -> str:
 
     upscaled = _upscale(img, DIGIT_UPSCALE)
     for psm in _DIGIT_PSM_MODES:
-        candidate = pytesseract.image_to_string(
-            upscaled, config=f"--psm {psm} {_DIGIT_WHITELIST}"
-        ).strip()
+        candidate = _run_tesseract(upscaled, config=f"--psm {psm} {_DIGIT_WHITELIST}")
         if len(candidate) == 1 and candidate.isdigit():
             return candidate
     return ""

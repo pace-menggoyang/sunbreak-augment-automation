@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pytesseract
 from PIL import Image
 
 from qurio_aug import ocr
@@ -161,6 +162,51 @@ def test_debridged_digit_reads_correctly_end_to_end():
     y1 = min(img.height, value_bbox[3] + ocr.DIGIT_CROP_PADDING)
     digit_text = ocr._ocr_single_digit(img.crop((x0, y0, x1, y1)))
     assert digit_text == "1"
+
+
+# --- _run_tesseract: resilience to a transient pytesseract/tesseract
+# subprocess failure, observed live after ~400 rapid sequential OCR calls
+# in one run -- tesseract's temp output file was gone by the time
+# pytesseract tried to read it back (FileNotFoundError), which crashed the
+# entire process instead of just failing that one OCR call. ---
+
+
+def test_run_tesseract_treats_missing_temp_file_as_no_text_found():
+    original = pytesseract.image_to_string
+    pytesseract.image_to_string = lambda *a, **kw: (_ for _ in ()).throw(
+        FileNotFoundError("simulated missing tesseract temp output file")
+    )
+    try:
+        result = ocr._run_tesseract(Image.new("RGB", (10, 10)), "--psm 7")
+    finally:
+        pytesseract.image_to_string = original
+    assert result == ""
+
+
+def test_run_tesseract_treats_tesseract_error_as_no_text_found():
+    original = pytesseract.image_to_string
+
+    def boom(*a, **kw):
+        raise pytesseract.pytesseract.TesseractError(1, "simulated tesseract failure")
+
+    pytesseract.image_to_string = boom
+    try:
+        result = ocr._run_tesseract(Image.new("RGB", (10, 10)), "--psm 7")
+    finally:
+        pytesseract.image_to_string = original
+    assert result == ""
+
+
+def test_run_tesseract_passes_through_real_text_normally():
+    # Confirms the wrapper isn't swallowing legitimate results -- only
+    # the two specific failure modes above.
+    original = pytesseract.image_to_string
+    pytesseract.image_to_string = lambda *a, **kw: "  Artillery  "
+    try:
+        result = ocr._run_tesseract(Image.new("RGB", (10, 10)), "--psm 7")
+    finally:
+        pytesseract.image_to_string = original
+    assert result == "Artillery"
 
 
 def run_all():
