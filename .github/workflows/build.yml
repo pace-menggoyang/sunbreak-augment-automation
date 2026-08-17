@@ -26,7 +26,14 @@ jobs:
 
       - name: Install Tesseract (Windows)
         if: runner.os == 'Windows'
-        run: choco install tesseract -y
+        shell: pwsh
+        run: |
+          choco install tesseract -y
+          # choco installs it, but doesn't refresh PATH for the rest of
+          # this job -- later steps run in fresh shells that only see
+          # GITHUB_PATH additions made explicitly, not whatever choco
+          # broadcast to the (already-passed) system environment.
+          echo "C:\Program Files\Tesseract-OCR" >> $env:GITHUB_PATH
 
       - name: Run offline test suite
         shell: bash
