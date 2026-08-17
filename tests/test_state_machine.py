@@ -73,23 +73,38 @@ def _unparseable():
 
 
 class Script:
-    """Each entry is (indicator_result, page_rows) consumed in order, one
-    per screenshot_fn() call. `region_config` in the RegionConfig calls
-    is ignored -- row_templates content doesn't matter since read_page is
-    faked directly.
+    """Each entry is (indicator_result, page_rows) for one logical page,
+    indexed by how far navigation has actually gotten -- not by call
+    count -- so that read_page_indicator (called by _wait_for_page
+    *before* read_page, to confirm a next_page() press actually landed)
+    reports the page navigation is really on, the same as read_page does.
+    `region_config` in the RegionConfig calls is ignored -- row_templates
+    content doesn't matter since read_page is faked directly.
+
+    Pass `game` (the same FakeGame instance driving next_page()/
+    prev_page()) so the current page tracks its net next_calls -
+    prev_calls; omit it for single-page scripts that never navigate,
+    where the index is always 0 regardless.
     """
 
-    def __init__(self, monkeypatch, entries):
+    def __init__(self, monkeypatch, entries, game=None):
         self.entries = entries
         self.calls = 0
+        self.game = game
         monkeypatch.setattr(ocr, "read_page_indicator", self._read_page_indicator)
         monkeypatch.setattr(ocr, "read_page", self._read_page)
         # read_full_roll now sleeps for real (settle delay + retry backoff)
         # -- stub it out so these stay fast, unit-level tests.
         monkeypatch.setattr(state_machine.time, "sleep", lambda seconds: None)
 
+    def _page_index(self) -> int:
+        if self.game is None:
+            return 0
+        return max(0, self.game.next_calls - self.game.prev_calls)
+
     def _current(self):
-        return self.entries[min(self.calls, len(self.entries) - 1)]
+        idx = min(self._page_index(), len(self.entries) - 1)
+        return self.entries[idx]
 
     def _read_page_indicator(self, screenshot, region_config):
         return self._current()[0]
@@ -129,11 +144,11 @@ def test_two_page_roll_driven_by_indicator(monkeypatch):
     # protected_skills non-empty and reachable via page 1 gains, so the
     # "must check every page" path is exercised -- see the early-exit
     # tests below for the optimized paths.
+    game = FakeGame()
     script = Script(monkeypatch, [
         ((1, 2), [_row("Artillery"), _row("Diversion"), _row("Critical Boost")]),
         ((2, 2), [_row("Partbreaker"), _blank(), _blank()]),
-    ])
-    game = FakeGame()
+    ], game=game)
     results = state_machine.read_full_roll(
         script.screenshot_fn, game, DUMMY_REGION_CONFIG, DUMMY_WINDOW_BOUNDS,
         _goal(protected_skills=frozenset({"Blood Awakening"}), required="Artillery"),
@@ -146,12 +161,12 @@ def test_two_page_roll_driven_by_indicator(monkeypatch):
 
 
 def test_three_page_roll(monkeypatch):
+    game = FakeGame()
     script = Script(monkeypatch, [
         ((1, 3), [_row("Skill A"), _row("Skill B"), _row("Skill C")]),
-        ((1, 3), [_row("Skill D"), _row("Skill E"), _row("Skill F")]),
-        ((1, 3), [_row("Skill G"), _blank(), _blank()]),
-    ])
-    game = FakeGame()
+        ((2, 3), [_row("Skill D"), _row("Skill E"), _row("Skill F")]),
+        ((3, 3), [_row("Skill G"), _blank(), _blank()]),
+    ], game=game)
     results = state_machine.read_full_roll(
         script.screenshot_fn, game, DUMMY_REGION_CONFIG, DUMMY_WINDOW_BOUNDS,
         _goal(protected_skills=frozenset({"Blood Awakening"}), required="Skill A"),
@@ -203,12 +218,12 @@ def test_protected_violation_on_page1_skips_page2(monkeypatch):
 
 
 def test_protected_violation_on_page2_stops_there(monkeypatch):
+    game = FakeGame()
     script = Script(monkeypatch, [
         ((1, 3), [_row("Artillery"), _row("Diversion"), _row("Critical Boost")]),
         ((2, 3), [_removed_row("Blood Awakening"), _blank(), _blank()]),
         ((3, 3), [_row("Skill Z"), _blank(), _blank()]),  # never read
-    ])
-    game = FakeGame()
+    ], game=game)
     results = state_machine.read_full_roll(
         script.screenshot_fn, game, DUMMY_REGION_CONFIG, DUMMY_WINDOW_BOUNDS,
         _goal(protected_skills=frozenset({"Blood Awakening"}), required="Artillery"),
@@ -222,11 +237,11 @@ def test_protected_violation_on_page2_stops_there(monkeypatch):
 def test_protected_skill_loss_not_violating_because_not_present_reads_all_pages(monkeypatch):
     # protected_skills configured, no violation anywhere -- must still
     # read every page, same as before this optimization existed.
+    game = FakeGame()
     script = Script(monkeypatch, [
         ((1, 2), [_row("Artillery"), _row("Diversion"), _row("Critical Boost")]),
         ((2, 2), [_row("Partbreaker"), _blank(), _blank()]),
-    ])
-    game = FakeGame()
+    ], game=game)
     results = state_machine.read_full_roll(
         script.screenshot_fn, game, DUMMY_REGION_CONFIG, DUMMY_WINDOW_BOUNDS,
         _goal(protected_skills=frozenset({"Blood Awakening"}), required="Artillery"),  # never appears
@@ -322,6 +337,32 @@ def test_unparseable_row_recovers_on_retry(monkeypatch):
     )
     assert [r.name for r in results] == ["Artillery", "Diversion"]
     assert call_count["n"] == 2  # one failed read, one retry that succeeded
+
+
+def test_page_transition_that_never_lands_raises_clear_error(monkeypatch):
+    # next_page() gets pressed, but the on-screen indicator never actually
+    # advances past page 1 -- only one entry in the script, so _current()
+    # keeps returning it regardless of how many times next_page() is
+    # called, simulating a page-turn keypress that didn't register (or
+    # whose transition never completed). Confirmed live: this previously
+    # fell through to a "continuation" read against real page-1 content
+    # (Slots/Water Resistance rows misread as garbled/blank skill rows),
+    # raising a confusing OCR-failure error instead of naming the actual
+    # problem -- see _wait_for_page.
+    game = FakeGame()
+    script = Script(monkeypatch, [
+        ((1, 2), [_row("Artillery"), _row("Diversion"), _row("Critical Boost")]),
+    ], game=game)
+    try:
+        state_machine.read_full_roll(
+            script.screenshot_fn, game, DUMMY_REGION_CONFIG, DUMMY_WINDOW_BOUNDS,
+            _goal(protected_skills=frozenset({"Blood Awakening"}), required="Artillery"),
+        )
+        assert False, "expected UnreadableRollError"
+    except state_machine.UnreadableRollError as e:
+        assert "page 2" in str(e)
+        assert "1/2" in str(e)
+    assert game.next_calls == 1  # tried to turn the page once, then gave up
 
 
 def test_indicator_not_starting_on_page_1_raises(monkeypatch):
