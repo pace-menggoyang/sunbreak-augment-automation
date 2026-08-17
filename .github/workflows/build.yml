@@ -19,6 +19,15 @@ jobs:
         with:
           python-version: "3.14"
       - run: pip install -r requirements.txt
+
+      - name: Install Tesseract (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tesseract
+
+      - name: Install Tesseract (Windows)
+        if: runner.os == 'Windows'
+        run: choco install tesseract -y
+
       - name: Run offline test suite
         shell: bash
         run: |
