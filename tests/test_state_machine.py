@@ -363,6 +363,7 @@ def test_page_transition_that_never_lands_raises_clear_error(monkeypatch):
         assert "page 2" in str(e)
         assert "1/2" in str(e)
     assert game.next_calls == 1  # tried to turn the page once, then gave up
+    assert game.prev_calls == 1  # and the cleanup still ran despite the raise -- see next test
 
 
 def test_page_indicator_reverting_mid_retry_is_caught(monkeypatch):
@@ -395,6 +396,33 @@ def test_page_indicator_reverting_mid_retry_is_caught(monkeypatch):
     except state_machine.UnreadableRollError as e:
         assert "page 2" in str(e)
         assert "1/2" in str(e)
+
+
+def test_page_read_failure_still_navigates_back_to_page_1(monkeypatch):
+    # A raise out of the page 2+ read must not abandon the game mid-
+    # pagination: next_page_presses was already incremented before the
+    # failing read, so without a try/finally around it, an exception here
+    # skips the prev_page() cleanup entirely -- the game is left sitting
+    # on page 2, and the *next* invocation's trigger_roll() macro (which
+    # assumes it's starting from Material Select, STATE1) sends the wrong
+    # keys into a still-on-page-2 Augmentation Results screen instead.
+    # That's a plausible way one crash's leftover state corrupts the next
+    # run's very first read -- confirmed as a real gap in this code, not
+    # just theorized.
+    game = FakeGame()
+    script = Script(monkeypatch, [
+        ((1, 3), [_row("Artillery"), _row("Diversion"), _row("Critical Boost")]),
+        ((2, 3), [_unparseable(), _blank(), _blank()]),  # never recovers -- exhausts retries
+    ], game=game)
+    try:
+        state_machine.read_full_roll(
+            script.screenshot_fn, game, DUMMY_REGION_CONFIG, DUMMY_WINDOW_BOUNDS,
+            _goal(protected_skills=frozenset({"Blood Awakening"}), required="Artillery"),
+        )
+        assert False, "expected UnreadableRollError"
+    except state_machine.UnreadableRollError:
+        pass
+    assert game.next_calls == game.prev_calls == 1
 
 
 def test_indicator_not_starting_on_page_1_raises(monkeypatch):

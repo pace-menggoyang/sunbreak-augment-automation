@@ -312,22 +312,37 @@ def read_full_roll(
     already_rejected = _protected_violated(page1_results, goal.protected_skills)
     doomed = not already_rejected and not any_profile_reachable(goal.profiles, page1_results)
     next_page_presses = 0
-    if not already_rejected and not doomed and goal.protected_skills:
-        for page_num in range(2, total + 1):
-            game.next_page()
-            next_page_presses += 1
-            page = _read_page_rows(
-                screenshot_fn, region_config.row_templates["continuation"], game, window_bounds,
-                goal.protected_skills, should_stop,
-                region_config=region_config, expected_page=page_num,
-            )
-            page_results = _page_skills(page)
-            results.extend(page_results)
-            if _protected_violated(page_results, goal.protected_skills):
-                break  # already rejected -- no need to read further pages
-
-    for _ in range(next_page_presses):
-        game.prev_page()
+    try:
+        if not already_rejected and not doomed and goal.protected_skills:
+            for page_num in range(2, total + 1):
+                game.next_page()
+                next_page_presses += 1
+                page = _read_page_rows(
+                    screenshot_fn, region_config.row_templates["continuation"], game, window_bounds,
+                    goal.protected_skills, should_stop,
+                    region_config=region_config, expected_page=page_num,
+                )
+                page_results = _page_skills(page)
+                results.extend(page_results)
+                if _protected_violated(page_results, goal.protected_skills):
+                    break  # already rejected -- no need to read further pages
+    finally:
+        # Unconditional, not just on the happy path: if a page 2+ read
+        # raises (UnreadableRollError from unreadable content, or
+        # StopRequested from a force-stop mid-retry), next_page() presses
+        # already sent were about to be abandoned uncleaned -- the game
+        # left sitting on whatever page it navigated to, not page 1. The
+        # caller assumes read_full_roll always leaves the game back on
+        # page 1 (see this function's docstring); on a hard stop that
+        # exits the whole process, the *next* invocation's trigger_roll()
+        # blindly sends STATE1 keys (Material Select) assuming that's
+        # true -- sent into a still-on-page-2 Augmentation Results screen
+        # instead, those keys do something else entirely, which is a
+        # plausible way one crash's leftover state corrupts the *next*
+        # run's very first read. Pressing prev_page() here even while an
+        # exception is propagating closes that gap.
+        for _ in range(next_page_presses):
+            game.prev_page()
 
     return results
 
