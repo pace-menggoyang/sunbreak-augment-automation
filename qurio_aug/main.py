@@ -255,6 +255,7 @@ def _run(args, goal, common_kwargs, should_stop) -> None:
             )
         except state_machine.UnreadableRollError as e:
             print(f"UNREADABLE: {e}", file=sys.stderr)
+            print(f"Full step-by-step trace: {log._debug_path}", file=sys.stderr)
             sys.exit(2)
         sys.exit(0 if decision.accepted else 1)
 
@@ -264,6 +265,7 @@ def _run(args, goal, common_kwargs, should_stop) -> None:
         )
     except state_machine.UnreadableRollError as e:
         print(f"UNREADABLE, stopping: {e}", file=sys.stderr)
+        print(f"Full step-by-step trace: logs/{goal.name}-*.debug.log (most recent)", file=sys.stderr)
         sys.exit(2)
 
     if result.accepted:

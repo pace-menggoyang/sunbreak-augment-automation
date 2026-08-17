@@ -127,6 +127,18 @@ def _page_skills(page: list[ocr.ParsedRow]) -> list[SkillResult]:
     return [row.skill for row in page if row.skill is not None]
 
 
+def _describe_page(page: list[ocr.ParsedRow]) -> str:
+    parts = []
+    for row in page:
+        if row.skill is not None:
+            parts.append(f"{row.skill.name} (removed)" if row.skill.removed else f"{row.skill.name} {row.skill.delta:+d}")
+        elif row.blank:
+            parts.append("blank")
+        else:
+            parts.append("UNPARSEABLE")
+    return ", ".join(parts)
+
+
 def _read_page_rows(
     screenshot_fn,
     template: list[ocr.RowRegions],
@@ -136,6 +148,7 @@ def _read_page_rows(
     should_stop: Callable[[], bool] = lambda: False,
     region_config: ocr.RegionConfig | None = None,
     expected_page: int | None = None,
+    debug_log: Callable[[str], None] = lambda msg: None,
 ) -> list[ocr.ParsedRow]:
     """Reads one page, retrying with a fresh capture if a row comes back
     unparseable -- most commonly caused by the "newly changed" sparkle
@@ -165,15 +178,29 @@ def _read_page_rows(
     persistently wrong page is reported as its own specific error, not a
     generic unparseable-row one, since the two need different fixes (a
     stuck page-turn vs. a lingering sparkle/glow decoration).
+
+    debug_log (see AttemptLogger.debug) records what each capture and
+    retry actually saw -- indicator mismatches, which rows read as what,
+    retry counts -- so a failure's full lead-up survives on disk instead
+    of only being reconstructable after the fact from a single saved
+    screenshot (which is exactly how the last several live failures this
+    project hit had to be diagnosed, each taking real back-and-forth to
+    pin down).
     """
+    page_label = f"page {expected_page}" if expected_page is not None else "page"
+
     def _capture() -> tuple[Image.Image, list[ocr.ParsedRow] | None, tuple[int, int] | None]:
         game.park_mouse(window_bounds)
         screenshot = screenshot_fn()
         if expected_page is not None:
             indicator = ocr.read_page_indicator(screenshot, region_config)
             if indicator is None or indicator[0] != expected_page:
+                got = "no indicator" if indicator is None else f"{indicator[0]}/{indicator[1]}"
+                debug_log(f"{page_label}: indicator mismatch, expected {expected_page} got {got}")
                 return screenshot, None, indicator
-        return screenshot, ocr.read_page(screenshot, template), None
+        page = ocr.read_page(screenshot, template)
+        debug_log(f"{page_label}: read -- {_describe_page(page)}")
+        return screenshot, page, None
 
     screenshot, page, bad_indicator = _capture()
 
@@ -187,11 +214,13 @@ def _read_page_rows(
         and retries < UNREADABLE_RETRY_COUNT
     ):
         retries += 1
+        debug_log(f"{page_label}: retry {retries}/{UNREADABLE_RETRY_COUNT}")
         _interruptible_sleep(UNREADABLE_RETRY_DELAY, should_stop)
         screenshot, page, bad_indicator = _capture()
 
     if page is None:
         got = "no indicator" if bad_indicator is None else f"{bad_indicator[0]}/{bad_indicator[1]}"
+        debug_log(f"{page_label}: FAILED -- indicator still {got} after {UNREADABLE_RETRY_COUNT} retries")
         raise UnreadableRollError(
             f"expected to be on page {expected_page}, but the indicator still "
             f"reads {got} after {UNREADABLE_RETRY_COUNT} retries -- the page-turn "
@@ -201,6 +230,7 @@ def _read_page_rows(
     if any(row.unparseable for row in page) and not _already_decided():
         saved = _dump_debug_crops(screenshot, template, page)
         saved_list = "\n  ".join(str(p) for p in saved)
+        debug_log(f"{page_label}: FAILED -- still unparseable after {UNREADABLE_RETRY_COUNT} retries")
         raise UnreadableRollError(
             f"a skill row still couldn't be parsed after {UNREADABLE_RETRY_COUNT} "
             "retries -- refusing to guess. Saved for inspection:\n  " + saved_list
@@ -220,6 +250,7 @@ def read_full_roll(
     goal: Goal,
     settle_delay: float = RESULT_SETTLE_DELAY,
     should_stop: Callable[[], bool] = lambda: False,
+    debug_log: Callable[[str], None] = lambda msg: None,
 ) -> list[SkillResult]:
     """Pages through the skill list (Q/E) reading pages until either
     everything decision-relevant has been seen, or a page 2+ read can be
@@ -274,6 +305,15 @@ def read_full_roll(
     the autonomous loop and a one-shot --dry-run evaluation always get it.
 
     Always leaves the game back on page 1 of STATE4 before returning.
+
+    debug_log (see AttemptLogger.debug) records the indicator read, page
+    1's parsed results, the already_rejected/doomed reasoning behind
+    whether page 2+ gets read at all, and every navigation step -- this
+    is what actually would have shown, in real time, whether a given
+    page-2 excursion was legitimate or a false-positive fuzzy-match
+    triggering an unnecessary (and here, failure-prone) page turn, rather
+    than that having to be reconstructed after the fact from a single
+    saved screenshot.
     """
     game.park_mouse(window_bounds)
     _interruptible_sleep(settle_delay, should_stop)
@@ -282,21 +322,24 @@ def read_full_roll(
     screenshot = screenshot_fn()
 
     indicator = ocr.read_page_indicator(screenshot, region_config)
+    debug_log(f"page indicator: {indicator}")
     if indicator is None:
         page = _read_page_rows(
             screenshot_fn, region_config.row_templates["single_page"], game, window_bounds,
-            goal.protected_skills, should_stop,
+            goal.protected_skills, should_stop, debug_log=debug_log,
         )
         results.extend(_page_skills(page))
         return results
 
     current, total = indicator
     if current != 1:
+        debug_log(f"FAILED: expected to start on page 1, indicator reads {current}/{total}")
         raise UnreadableRollError(
             f"expected to start pagination on page 1, but the indicator "
             f"reads {current}/{total} -- game state doesn't match assumptions"
         )
     if total > MAX_PAGES:
+        debug_log(f"FAILED: implausible page count {total} (cap is {MAX_PAGES})")
         raise UnreadableRollError(
             f"page indicator reports {total} pages, above the sanity cap "
             f"of {MAX_PAGES} -- likely a misread, refusing to guess"
@@ -304,28 +347,36 @@ def read_full_roll(
 
     page = _read_page_rows(
         screenshot_fn, region_config.row_templates["first_of_multi"], game, window_bounds,
-        goal.protected_skills, should_stop,
+        goal.protected_skills, should_stop, debug_log=debug_log,
     )
     page1_results = _page_skills(page)
     results.extend(page1_results)
 
     already_rejected = _protected_violated(page1_results, goal.protected_skills)
     doomed = not already_rejected and not any_profile_reachable(goal.profiles, page1_results)
+    debug_log(
+        f"page 1 done -- results: {_describe_page(page)} | "
+        f"already_rejected={already_rejected} doomed={doomed} total_pages={total}"
+    )
     next_page_presses = 0
     try:
         if not already_rejected and not doomed and goal.protected_skills:
             for page_num in range(2, total + 1):
+                debug_log(f"paging forward to page {page_num}")
                 game.next_page()
                 next_page_presses += 1
                 page = _read_page_rows(
                     screenshot_fn, region_config.row_templates["continuation"], game, window_bounds,
                     goal.protected_skills, should_stop,
-                    region_config=region_config, expected_page=page_num,
+                    region_config=region_config, expected_page=page_num, debug_log=debug_log,
                 )
                 page_results = _page_skills(page)
                 results.extend(page_results)
                 if _protected_violated(page_results, goal.protected_skills):
+                    debug_log(f"page {page_num}: protected violation confirmed, stopping early")
                     break  # already rejected -- no need to read further pages
+        else:
+            debug_log("page 2+ skipped (already_rejected, doomed, or no protected_skills configured)")
     finally:
         # Unconditional, not just on the happy path: if a page 2+ read
         # raises (UnreadableRollError from unreadable content, or
@@ -343,6 +394,8 @@ def read_full_roll(
         # exception is propagating closes that gap.
         for _ in range(next_page_presses):
             game.prev_page()
+        if next_page_presses:
+            debug_log(f"navigated back to page 1 ({next_page_presses} prev_page press(es))")
 
     return results
 
@@ -397,11 +450,14 @@ def evaluate_current_screen(
     region_config = region_config or ocr.load_region_config()
     window = capture.find_game_window(window_title_hint or region_config.window_title_hint)
     game = GameInput(post_press_delay=post_press_delay, press_hold=press_hold, should_stop=should_stop)
+    debug_log = log.debug if log is not None else (lambda msg: None)
 
     def screenshot_fn() -> Image.Image:
         return capture.screenshot_window(window)
 
-    roll = read_full_roll(screenshot_fn, game, region_config, window.bounds, goal, settle_delay, should_stop)
+    roll = read_full_roll(
+        screenshot_fn, game, region_config, window.bounds, goal, settle_delay, should_stop, debug_log,
+    )
     decision = evaluate(goal, roll)
     if log is not None:
         print(log.log(decision))
@@ -452,6 +508,7 @@ def run(
         for attempt in range(1, max_attempts + 1):
             roll = read_full_roll(
                 screenshot_fn, game, region_config, window.bounds, goal, settle_delay, should_stop,
+                log.debug,
             )
             decision = evaluate(goal, roll)
             print(log.log(decision))

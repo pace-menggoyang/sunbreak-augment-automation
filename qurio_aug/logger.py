@@ -47,7 +47,27 @@ class AttemptLogger:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         self._txt_path = self.log_dir / f"{self.goal.name}-{stamp}.log"
         self._jsonl_path = self.log_dir / f"{self.goal.name}-{stamp}.jsonl"
+        self._debug_path = self.log_dir / f"{self.goal.name}-{stamp}.debug.log"
         self.attempt = 0
+
+    def debug(self, message: str) -> None:
+        """Step-by-step trace of what state_machine.py is actually doing
+        while reading a roll -- page indicator reads, navigation,
+        retries, the reasoning behind a doomed/already_rejected decision
+        -- written to its own file so that context survives even if the
+        terminal running this gets closed or scrolled past. This was the
+        actual gap behind several live debugging sessions where a
+        failure had to be reverse-engineered from a single saved
+        screenshot after the fact, with no record of what the code
+        believed was happening in the moments leading up to it. Kept
+        separate from the human-readable per-attempt .log (which only
+        records completed decisions) since this is much higher-volume
+        and mostly only useful once something's already gone wrong, not
+        for a normal skim of "what happened this run."
+        """
+        ts = time.strftime("%H:%M:%S") + f".{int(time.time() * 1000) % 1000:03d}"
+        with self._debug_path.open("a") as f:
+            f.write(f"[{ts}] [attempt #{self.attempt + 1}] {message}\n")
 
     def log(self, decision: Decision) -> str:
         self.attempt += 1
