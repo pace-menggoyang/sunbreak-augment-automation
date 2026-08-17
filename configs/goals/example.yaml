@@ -1,0 +1,24 @@
+# Example goal config, modeled on the Primordial Greaves rolls seen in
+# step-references/. Copy this per armor piece / farming goal.
+name: primordial-greaves-artillery
+
+# "skills_plus" or "regular" -- must match whatever you selected in-game
+# before starting the automation at STATE 1 (Material Select). This is
+# logging metadata only; the read/decide/act loop behaves identically
+# either way since it reacts to whatever actually lands on screen.
+augment_type: skills_plus
+
+# Reject the roll if any of these lose a level or get fully removed
+# ("None"), no matter which profile below would otherwise match.
+protected_skills:
+  - Weakness Exploit
+
+# A roll is accepted if it matches ANY ONE of these profiles (OR logic).
+# This example only needs one profile; see configs/goals/hellfire_strife.yaml
+# for a multi-profile goal.
+profiles:
+  - required_skills:
+      - name: Artillery
+        min_level: 1
+    allowed_additional_skills:
+      - Diversion

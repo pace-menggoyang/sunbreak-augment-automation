@@ -1,0 +1,860 @@
+[
+  {
+    "armor_series": "Kamura Legacy",
+    "armor_id": 300,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Leather X",
+    "armor_id": 301,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Chainmail X",
+    "armor_id": 302,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Hunter X",
+    "armor_id": 303,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Alloy X",
+    "armor_id": 305,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Bone X",
+    "armor_id": 382,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Gargwa Mask X",
+    "armor_id": 342,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Rhenoplos X",
+    "armor_id": 344,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Bullfango Mask X",
+    "armor_id": 347,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Droth X",
+    "armor_id": 349,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Bnahabra X",
+    "armor_id": 346,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Hornetaur",
+    "armor_id": 409,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Vespoid",
+    "armor_id": 408,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Jaggi X",
+    "armor_id": 345,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Jaggi Mask X",
+    "armor_id": 377,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Velociprey",
+    "armor_id": 407,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Izuchi X",
+    "armor_id": 338,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Baggi X",
+    "armor_id": 352,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Kulu-Ya-Ku X",
+    "armor_id": 368,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Wroggi X",
+    "armor_id": 351,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Arzuros X",
+    "armor_id": 353,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Lagombi X",
+    "armor_id": 381,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Volvidon X",
+    "armor_id": 354,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Aknosom X",
+    "armor_id": 327,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Royal Ludroth X",
+    "armor_id": 355,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Barroth X",
+    "armor_id": 356,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Hermitaur",
+    "armor_id": 386,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Tetranadon X",
+    "armor_id": 328,
+    "aug_pool": 1,
+    "budget": 20
+  },
+  {
+    "armor_series": "Ingot X",
+    "armor_id": 306,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Skalda X",
+    "armor_id": 318,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Spio X",
+    "armor_id": 319,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Grand Chaos",
+    "armor_id": 316,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Edel X",
+    "armor_id": 317,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Shell-Studded X",
+    "armor_id": 324,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Melahoa X",
+    "armor_id": 308,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Five Element",
+    "armor_id": 424,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Knight Squire",
+    "armor_id": 442,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Yukumo Sky",
+    "armor_id": 427,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Slagtoth X",
+    "armor_id": 343,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Khezu X",
+    "armor_id": 357,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Bishaten X",
+    "armor_id": 326,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Orangaten",
+    "armor_id": 396,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Pukei-Pukei X",
+    "armor_id": 369,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Jyuratodus X",
+    "armor_id": 370,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Basarios X",
+    "armor_id": 364,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Somnacanth X",
+    "armor_id": 329,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Auroracanth",
+    "armor_id": 397,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Rathian X",
+    "armor_id": 360,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Tobi-Kadachi X",
+    "armor_id": 371,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Anjanath X",
+    "armor_id": 372,
+    "aug_pool": 2,
+    "budget": 18
+  },
+  {
+    "armor_series": "Skull X",
+    "armor_id": 375,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Dober X",
+    "armor_id": 304,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Vaik X",
+    "armor_id": 315,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Mosgharl X",
+    "armor_id": 311,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Mosgharl X",
+    "armor_id": 312,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Death Stench X",
+    "armor_id": 310,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Makluva X",
+    "armor_id": 309,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Aelucanth X",
+    "armor_id": 313,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Rhopessa X",
+    "armor_id": 314,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Royal Artillery Corps",
+    "armor_id": 443,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Guild Bard",
+    "armor_id": 412,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Scholar",
+    "armor_id": 413,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Guardian",
+    "armor_id": 425,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Brigade X",
+    "armor_id": 384,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Barioth X",
+    "armor_id": 359,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Sinister Demon",
+    "armor_id": 380,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Nargacuga X",
+    "armor_id": 358,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Goss Harag X",
+    "armor_id": 332,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Garangolm",
+    "armor_id": 404,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Ceanataur",
+    "armor_id": 387,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Almudron X",
+    "armor_id": 333,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Magmadron",
+    "armor_id": 400,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Rakna-Kadaki X",
+    "armor_id": 330,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Rakna-Kadaki X",
+    "armor_id": 331,
+    "aug_pool": 3,
+    "budget": 16
+  },
+  {
+    "armor_series": "Pyre-Kadaki",
+    "armor_id": 398,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Pyre-Kadaki",
+    "armor_id": 399,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Utsushi True (Visible)",
+    "armor_id": 320,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Channeler (Spring)",
+    "armor_id": 321,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Utsushi True (Hidden)",
+    "armor_id": 322,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Medium (Light)",
+    "armor_id": 323,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Chrome Metal X",
+    "armor_id": 374,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Uroktor X",
+    "armor_id": 350,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Remobra X",
+    "armor_id": 348,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Mizutsune X",
+    "armor_id": 383,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Rathalos X",
+    "armor_id": 361,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Zinogre X",
+    "armor_id": 365,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Tigrex X",
+    "armor_id": 362,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Diablos X",
+    "armor_id": 363,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Gore Magala",
+    "armor_id": 389,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Seregios",
+    "armor_id": 392,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Astalos",
+    "armor_id": 393,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Lunagaron",
+    "armor_id": 403,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Espinas",
+    "armor_id": 406,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Heavy Knight",
+    "armor_id": 441,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Hawk",
+    "armor_id": 415,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Lecturer",
+    "armor_id": 416,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Dignified",
+    "armor_id": 456,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Barbania",
+    "armor_id": 422,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Snowshear",
+    "armor_id": 423,
+    "aug_pool": 4,
+    "budget": 14
+  },
+  {
+    "armor_series": "Grand God's Peer",
+    "armor_id": 366,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Bazelgeuse X",
+    "armor_id": 373,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Damascus X",
+    "armor_id": 307,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Kushala X",
+    "armor_id": 339,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Grand Mizuha",
+    "armor_id": 340,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Kaiser X",
+    "armor_id": 341,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Arc",
+    "armor_id": 390,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Storge",
+    "armor_id": 391,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Malzeno",
+    "armor_id": 402,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Professor",
+    "armor_id": 410,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Charité",
+    "armor_id": 411,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Scholarly",
+    "armor_id": 417,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Commission",
+    "armor_id": 418,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Jelly X",
+    "armor_id": 325,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Sailor",
+    "armor_id": 414,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Archfiend Armor",
+    "armor_id": 405,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Ibushi - Pure",
+    "armor_id": 334,
+    "aug_pool": 13,
+    "budget": 10
+  },
+  {
+    "armor_series": "Narwa - Pure",
+    "armor_id": 336,
+    "aug_pool": 13,
+    "budget": 10
+  },
+  {
+    "armor_series": "Crimson Valstrax - Eclipse",
+    "armor_id": 367,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Grand Divine Ire",
+    "armor_id": 388,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Sinister Grudge",
+    "armor_id": 395,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Base Commander",
+    "armor_id": 419,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Base Commander",
+    "armor_id": 420,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Soaring Feather",
+    "armor_id": 459,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Blessed Feather",
+    "armor_id": 460,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Guild Palace",
+    "armor_id": 426,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Pride",
+    "armor_id": 401,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Golden Lune",
+    "armor_id": 428,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Silver Sol",
+    "armor_id": 429,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Lucent Narga",
+    "armor_id": 431,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Onmyo",
+    "armor_id": 394,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Flaming Espinas",
+    "armor_id": 430,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Risen Mizuha",
+    "armor_id": 491,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Chaotic Gore",
+    "armor_id": 494,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Nephilim",
+    "armor_id": 495,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Risen Kushala",
+    "armor_id": 492,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Risen Kaiser",
+    "armor_id": 493,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Rimeguard",
+    "armor_id": 498,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Crimson Valstrax - Epoch",
+    "armor_id": 499,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Tempest",
+    "armor_id": 500,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Virtue",
+    "armor_id": 501,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Prudence",
+    "armor_id": 506,
+    "aug_pool": 6,
+    "budget": 10
+  },
+  {
+    "armor_series": "Buff Body",
+    "armor_id": 504,
+    "aug_pool": 5,
+    "budget": 12
+  },
+  {
+    "armor_series": "Primordial",
+    "armor_id": 502,
+    "aug_pool": 6,
+    "budget": 10
+  }
+]

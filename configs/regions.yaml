@@ -1,0 +1,68 @@
+# ROI boxes for the Augmented Status skill rows, as fractions of the real
+# 16:9 game content rect (x0, y0, x1, y1), each in [0, 1] -- NOT fractions
+# of the raw captured window. qurio_aug.capture.screenshot_window already
+# crops out any letterbox/pillarbox bars before these boxes are applied
+# (see capture/_common.py's get_content_rect), so these fractions are the
+# same across platforms/window sizes regardless of how much (if any)
+# black bar the raw capture happened to include.
+#
+# These don't need to be pixel-perfect: ocr.py auto-detects the actual
+# text's pixel bounding box *within* each ROI before OCR'ing it, so a box
+# that's a bit too generous is fine (as long as it doesn't bleed into a
+# neighboring row) -- what matters is that the real text is fully inside
+# the box.
+#
+# Defaults below were derived by re-expressing the original window-relative
+# calibration (measured against a 2870x1800 macOS/CrossOver capture, which
+# included ~90px top/bottom letterbox bars) as content-rect-relative
+# fractions -- a pure coordinate transform, not a fresh calibration. They
+# get you started but MUST be re-verified against your live window with
+# `python -m qurio_aug.calibrate` -- window chrome, DPI scaling, or a
+# different in-game resolution will still shift these.
+window_title_hint: "Monster Hunter Rise"  # substring used to find the game window
+# Note: on macOS the game runs under CrossOver but its window is owned by
+# the wrapped .exe (MonsterHunterRise.exe / title "Monster Hunter Rise"),
+# not by "CrossOver" itself -- that only matches the separate launcher
+# window. The same title is expected to match a native Windows install too.
+
+# "<Q 1/2 E>" style indicator, shown above the skill list only when a roll
+# spans more than one page. Its presence/absence and the numbers in it
+# drive pagination directly (see state_machine.py) -- no page indicator
+# means the roll fits on a single page.
+page_indicator_box: [0.4401, 0.2052, 0.5690, 0.2454]
+
+# Three distinct layouts, since the skill rows land in different places
+# depending on pagination state (see ocr.py's module docstring):
+row_templates:
+  # A roll with 3 or fewer skill entries: no page indicator, Defense/Slots/
+  # Resistance rows shown above Skills.
+  single_page:
+    - name_box: [0.4062, 0.5056, 0.5411, 0.5427]
+      value_box: [0.5446, 0.5397, 0.6172, 0.5799]
+    - name_box: [0.4062, 0.5737, 0.5411, 0.6108]
+      value_box: [0.5446, 0.6078, 0.6172, 0.6481]
+    - name_box: [0.4062, 0.6418, 0.5411, 0.6791]
+      value_box: [0.5446, 0.6791, 0.6172, 0.7193]
+
+  # Page 1 of a multi-page roll: same Defense/Slots/Resistance rows as
+  # single_page, just shifted down to make room for the indicator.
+  first_of_multi:
+    - name_box: [0.4062, 0.5489, 0.5411, 0.5861]
+      value_box: [0.5446, 0.5830, 0.6172, 0.6233]
+    - name_box: [0.4062, 0.6171, 0.5411, 0.6542]
+      value_box: [0.5446, 0.6512, 0.6172, 0.6914]
+    - name_box: [0.4062, 0.6852, 0.5411, 0.7223]
+      value_box: [0.5446, 0.7193, 0.6172, 0.7596]
+
+  # Page 2+: no Defense/Slots/Resistance rows at all, skills start right
+  # below the indicator + "Skills" header.
+  continuation:
+    - name_box: [0.3922, 0.2888, 0.5411, 0.3228]
+      value_box: [0.5446, 0.3260, 0.6172, 0.3600]
+    - name_box: [0.3922, 0.3569, 0.5411, 0.3910]
+      value_box: [0.5446, 0.3941, 0.6172, 0.4282]
+    - name_box: [0.3922, 0.4251, 0.5411, 0.4591]
+      value_box: [0.5446, 0.4622, 0.6172, 0.4963]
+
+next_page_key: "e"
+prev_page_key: "q"

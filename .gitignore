@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.pyc
+logs/
+.DS_Store
+
+# Third-party datamine -- not ours to redistribute; data/*.json (generated
+# from it via scripts/build_data_from_xlsx.py) is what actually ships.
+*.xlsx
+
+# ~50MB of dev/test reference screenshots, not needed at runtime.
+step-references/
+
+# PyInstaller build output + its own generated spec cache -- packaging/
+# qurio-aug.spec is hand-written and stays tracked; this is just what
+# `pyinstaller` produces when run.
+/build/
+/dist/
+
+# CI-fetched Tesseract binaries -- vendored at build time by
+# packaging/vendor_tesseract_*.{sh,ps1}, not source.
+packaging/vendor/
+
+# Goal wizard output when run from a source checkout in this directory.
+/goals/

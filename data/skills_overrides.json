@@ -1,0 +1,116 @@
+[
+  {
+    "skill_id": null,
+    "name": "Blood Awakening",
+    "cost": null,
+    "source": "confirmed live in a Skills+ removal roll during calibration"
+  },
+  {
+    "skill_id": null,
+    "name": "Bludgeoner",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine"
+  },
+  {
+    "skill_id": null,
+    "name": "Bow Charge Plus",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine"
+  },
+  {
+    "skill_id": null,
+    "name": "Botanist",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine"
+  },
+  {
+    "skill_id": null,
+    "name": "Geologist",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine"
+  },
+  {
+    "skill_id": null,
+    "name": "Capture Master",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine"
+  },
+  {
+    "skill_id": null,
+    "name": "Carving Master",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine"
+  },
+  {
+    "skill_id": null,
+    "name": "Bombardier",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine"
+  },
+  {
+    "skill_id": null,
+    "name": "Jump Master",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine"
+  },
+  {
+    "skill_id": null,
+    "name": "Carving Pro",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine"
+  },
+  {
+    "skill_id": null,
+    "name": "Wind Alignment",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine"
+  },
+  {
+    "skill_id": null,
+    "name": "Thunder Alignment",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine"
+  },
+  {
+    "skill_id": null,
+    "name": "Stormsoul",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine (set-bonus skill)"
+  },
+  {
+    "skill_id": null,
+    "name": "Dereliction",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine (set-bonus skill)"
+  },
+  {
+    "skill_id": null,
+    "name": "Quick Breath",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine"
+  },
+  {
+    "skill_id": null,
+    "name": "Berserk",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine (set-bonus skill)"
+  },
+  {
+    "skill_id": null,
+    "name": "Heaven-Sent",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine (set-bonus skill)"
+  },
+  {
+    "skill_id": null,
+    "name": "Shock Absorber",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine (set-bonus skill)"
+  },
+  {
+    "skill_id": null,
+    "name": "Inspiration",
+    "cost": null,
+    "source": "mhrise.kiranico.com/data/skills, missing from the 16.0.0 datamine (set-bonus skill)"
+  }
+]

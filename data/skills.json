@@ -1,0 +1,712 @@
+[
+  {
+    "skill_id": 120,
+    "cost": 9,
+    "name": "Adrenaline Rush"
+  },
+  {
+    "skill_id": 43,
+    "cost": 3,
+    "name": "Affinity Sliding"
+  },
+  {
+    "skill_id": 2,
+    "cost": 12,
+    "name": "Agitator"
+  },
+  {
+    "skill_id": 51,
+    "cost": 15,
+    "name": "Ammo Up"
+  },
+  {
+    "skill_id": 45,
+    "cost": 12,
+    "name": "Artillery"
+  },
+  {
+    "skill_id": 1,
+    "cost": 15,
+    "name": "Attack Boost"
+  },
+  {
+    "skill_id": 27,
+    "cost": 9,
+    "name": "Ballistics"
+  },
+  {
+    "skill_id": null,
+    "name": "Berserk",
+    "cost": null
+  },
+  {
+    "skill_id": 128,
+    "cost": 9,
+    "name": "Bladescale Hone"
+  },
+  {
+    "skill_id": 21,
+    "cost": 6,
+    "name": "Blast Attack"
+  },
+  {
+    "skill_id": 78,
+    "cost": 3,
+    "name": "Blast Resistance"
+  },
+  {
+    "skill_id": 72,
+    "cost": 3,
+    "name": "Blight Resistance"
+  },
+  {
+    "skill_id": null,
+    "name": "Blood Awakening",
+    "cost": null
+  },
+  {
+    "skill_id": 112,
+    "cost": 12,
+    "name": "Blood Rite"
+  },
+  {
+    "skill_id": 117,
+    "cost": 12,
+    "name": "Bloodlust"
+  },
+  {
+    "skill_id": null,
+    "name": "Bludgeoner",
+    "cost": null
+  },
+  {
+    "skill_id": null,
+    "name": "Bombardier",
+    "cost": null
+  },
+  {
+    "skill_id": null,
+    "name": "Botanist",
+    "cost": null
+  },
+  {
+    "skill_id": null,
+    "name": "Bow Charge Plus",
+    "cost": null
+  },
+  {
+    "skill_id": 64,
+    "cost": 6,
+    "name": "Bubbly Dance"
+  },
+  {
+    "skill_id": 136,
+    "cost": 12,
+    "name": "Buildup Boost"
+  },
+  {
+    "skill_id": 131,
+    "cost": 12,
+    "name": "Burst"
+  },
+  {
+    "skill_id": null,
+    "name": "Capture Master",
+    "cost": null
+  },
+  {
+    "skill_id": null,
+    "name": "Carving Master",
+    "cost": null
+  },
+  {
+    "skill_id": null,
+    "name": "Carving Pro",
+    "cost": null
+  },
+  {
+    "skill_id": 100,
+    "cost": 6,
+    "name": "Chameleos Blessing"
+  },
+  {
+    "skill_id": 124,
+    "cost": 9,
+    "name": "Charge Master"
+  },
+  {
+    "skill_id": 116,
+    "cost": 12,
+    "name": "Coalescence"
+  },
+  {
+    "skill_id": 33,
+    "cost": 6,
+    "name": "Constitution"
+  },
+  {
+    "skill_id": 106,
+    "cost": 6,
+    "name": "Counterstrike"
+  },
+  {
+    "skill_id": 7,
+    "cost": 15,
+    "name": "Critical Boost"
+  },
+  {
+    "skill_id": 38,
+    "cost": 9,
+    "name": "Critical Draw"
+  },
+  {
+    "skill_id": 11,
+    "cost": 9,
+    "name": "Critical Element"
+  },
+  {
+    "skill_id": 6,
+    "cost": 15,
+    "name": "Critical Eye"
+  },
+  {
+    "skill_id": 56,
+    "cost": 3,
+    "name": "Defense Boost"
+  },
+  {
+    "skill_id": 118,
+    "cost": 6,
+    "name": "Defiance"
+  },
+  {
+    "skill_id": null,
+    "name": "Dereliction",
+    "cost": null
+  },
+  {
+    "skill_id": 98,
+    "cost": 3,
+    "name": "Diversion"
+  },
+  {
+    "skill_id": 57,
+    "cost": 3,
+    "name": "Divine Blessing"
+  },
+  {
+    "skill_id": 17,
+    "cost": 3,
+    "name": "Dragon Attack"
+  },
+  {
+    "skill_id": 141,
+    "cost": 12,
+    "name": "Dragon Conversion"
+  },
+  {
+    "skill_id": 103,
+    "cost": 9,
+    "name": "Dragonheart"
+  },
+  {
+    "skill_id": 61,
+    "cost": 9,
+    "name": "Earplugs"
+  },
+  {
+    "skill_id": 130,
+    "cost": 9,
+    "name": "Element Exploit"
+  },
+  {
+    "skill_id": 121,
+    "cost": 6,
+    "name": "Embolden"
+  },
+  {
+    "skill_id": 66,
+    "cost": 6,
+    "name": "Evade Extender"
+  },
+  {
+    "skill_id": 65,
+    "cost": 6,
+    "name": "Evade Window"
+  },
+  {
+    "skill_id": 13,
+    "cost": 3,
+    "name": "Fire Attack"
+  },
+  {
+    "skill_id": 93,
+    "cost": 3,
+    "name": "Flinch Free"
+  },
+  {
+    "skill_id": 30,
+    "cost": 9,
+    "name": "Focus"
+  },
+  {
+    "skill_id": 125,
+    "cost": 9,
+    "name": "Foray"
+  },
+  {
+    "skill_id": 92,
+    "cost": 3,
+    "name": "Fortify"
+  },
+  {
+    "skill_id": 90,
+    "cost": 3,
+    "name": "Free Meal"
+  },
+  {
+    "skill_id": 143,
+    "cost": 9,
+    "name": "Frenzied Bloodlust"
+  },
+  {
+    "skill_id": 140,
+    "cost": 12,
+    "name": "Frostcraft"
+  },
+  {
+    "skill_id": 114,
+    "cost": 9,
+    "name": "Furious"
+  },
+  {
+    "skill_id": null,
+    "name": "Geologist",
+    "cost": null
+  },
+  {
+    "skill_id": 84,
+    "cost": 12,
+    "name": "Good Luck"
+  },
+  {
+    "skill_id": 127,
+    "cost": 9,
+    "name": "Grinder (S)"
+  },
+  {
+    "skill_id": 35,
+    "cost": 6,
+    "name": "Guard"
+  },
+  {
+    "skill_id": 36,
+    "cost": 6,
+    "name": "Guard Up"
+  },
+  {
+    "skill_id": 132,
+    "cost": 15,
+    "name": "Guts"
+  },
+  {
+    "skill_id": 22,
+    "cost": 12,
+    "name": "Handicraft"
+  },
+  {
+    "skill_id": null,
+    "name": "Heaven-Sent",
+    "cost": null
+  },
+  {
+    "skill_id": 108,
+    "cost": 9,
+    "name": "Hellfire Cloak"
+  },
+  {
+    "skill_id": 91,
+    "cost": 9,
+    "name": "Heroics"
+  },
+  {
+    "skill_id": 44,
+    "cost": 3,
+    "name": "Horn Maestro"
+  },
+  {
+    "skill_id": 96,
+    "cost": 3,
+    "name": "Hunger Resistance"
+  },
+  {
+    "skill_id": 15,
+    "cost": 3,
+    "name": "Ice Attack"
+  },
+  {
+    "skill_id": null,
+    "name": "Inspiration",
+    "cost": null
+  },
+  {
+    "skill_id": 135,
+    "cost": 6,
+    "name": "Intrepid Heart"
+  },
+  {
+    "skill_id": 88,
+    "cost": 3,
+    "name": "Item Prolonger"
+  },
+  {
+    "skill_id": null,
+    "name": "Jump Master",
+    "cost": null
+  },
+  {
+    "skill_id": 101,
+    "cost": 6,
+    "name": "Kushala Blessing"
+  },
+  {
+    "skill_id": 9,
+    "cost": 12,
+    "name": "Latent Power"
+  },
+  {
+    "skill_id": 97,
+    "cost": 3,
+    "name": "Leap of Faith"
+  },
+  {
+    "skill_id": 46,
+    "cost": 6,
+    "name": "Load Shells"
+  },
+  {
+    "skill_id": 115,
+    "cost": 9,
+    "name": "Mail of Hellfire"
+  },
+  {
+    "skill_id": 32,
+    "cost": 6,
+    "name": "Marathon Runner"
+  },
+  {
+    "skill_id": 99,
+    "cost": 3,
+    "name": "Master Mounter"
+  },
+  {
+    "skill_id": 12,
+    "cost": 15,
+    "name": "Master's Touch"
+  },
+  {
+    "skill_id": 10,
+    "cost": 12,
+    "name": "Maximum Might"
+  },
+  {
+    "skill_id": 26,
+    "cost": 9,
+    "name": "Mind's Eye"
+  },
+  {
+    "skill_id": 77,
+    "cost": 3,
+    "name": "Muck Resistance"
+  },
+  {
+    "skill_id": 87,
+    "cost": 9,
+    "name": "Mushroomancer"
+  },
+  {
+    "skill_id": 48,
+    "cost": 15,
+    "name": "Normal/Rapid Up"
+  },
+  {
+    "skill_id": 37,
+    "cost": 9,
+    "name": "Offensive Guard"
+  },
+  {
+    "skill_id": 19,
+    "cost": 6,
+    "name": "Paralysis Attack"
+  },
+  {
+    "skill_id": 74,
+    "cost": 3,
+    "name": "Paralysis Resistance"
+  },
+  {
+    "skill_id": 81,
+    "cost": 6,
+    "name": "Partbreaker"
+  },
+  {
+    "skill_id": 3,
+    "cost": 12,
+    "name": "Peak Performance"
+  },
+  {
+    "skill_id": 49,
+    "cost": 15,
+    "name": "Pierce Up"
+  },
+  {
+    "skill_id": 18,
+    "cost": 6,
+    "name": "Poison Attack"
+  },
+  {
+    "skill_id": 73,
+    "cost": 3,
+    "name": "Poison Resistance"
+  },
+  {
+    "skill_id": 139,
+    "cost": 9,
+    "name": "Powder Mantle"
+  },
+  {
+    "skill_id": 31,
+    "cost": 9,
+    "name": "Power Prolonger"
+  },
+  {
+    "skill_id": 25,
+    "cost": 9,
+    "name": "Protective Polish"
+  },
+  {
+    "skill_id": 39,
+    "cost": 6,
+    "name": "Punishing Draw"
+  },
+  {
+    "skill_id": null,
+    "name": "Quick Breath",
+    "cost": null
+  },
+  {
+    "skill_id": 40,
+    "cost": 6,
+    "name": "Quick Sheathe"
+  },
+  {
+    "skill_id": 55,
+    "cost": 15,
+    "name": "Rapid Fire Up"
+  },
+  {
+    "skill_id": 107,
+    "cost": 12,
+    "name": "Rapid Morph"
+  },
+  {
+    "skill_id": 23,
+    "cost": 15,
+    "name": "Razor Sharp"
+  },
+  {
+    "skill_id": 53,
+    "cost": 6,
+    "name": "Recoil Down"
+  },
+  {
+    "skill_id": 59,
+    "cost": 3,
+    "name": "Recovery Speed"
+  },
+  {
+    "skill_id": 58,
+    "cost": 3,
+    "name": "Recovery Up"
+  },
+  {
+    "skill_id": 122,
+    "cost": 9,
+    "name": "Redirection"
+  },
+  {
+    "skill_id": 52,
+    "cost": 6,
+    "name": "Reload Speed"
+  },
+  {
+    "skill_id": 4,
+    "cost": 12,
+    "name": "Resentment"
+  },
+  {
+    "skill_id": 5,
+    "cost": 12,
+    "name": "Resuscitate"
+  },
+  {
+    "skill_id": null,
+    "name": "Shock Absorber",
+    "cost": null
+  },
+  {
+    "skill_id": 20,
+    "cost": 6,
+    "name": "Sleep Attack"
+  },
+  {
+    "skill_id": 75,
+    "cost": 3,
+    "name": "Sleep Resistance"
+  },
+  {
+    "skill_id": 41,
+    "cost": 6,
+    "name": "Slugger"
+  },
+  {
+    "skill_id": 119,
+    "cost": 12,
+    "name": "Sneak Attack"
+  },
+  {
+    "skill_id": 24,
+    "cost": 15,
+    "name": "Spare Shot"
+  },
+  {
+    "skill_id": 47,
+    "cost": 6,
+    "name": "Special Ammo Boost"
+  },
+  {
+    "skill_id": 60,
+    "cost": 6,
+    "name": "Speed Eating"
+  },
+  {
+    "skill_id": 85,
+    "cost": 3,
+    "name": "Speed Sharpening"
+  },
+  {
+    "skill_id": 123,
+    "cost": 3,
+    "name": "Spiribird's Call"
+  },
+  {
+    "skill_id": 50,
+    "cost": 15,
+    "name": "Spread Up"
+  },
+  {
+    "skill_id": 34,
+    "cost": 6,
+    "name": "Stamina Surge"
+  },
+  {
+    "skill_id": 42,
+    "cost": 3,
+    "name": "Stamina Thief"
+  },
+  {
+    "skill_id": 134,
+    "cost": 9,
+    "name": "Status Trigger"
+  },
+  {
+    "skill_id": 54,
+    "cost": 6,
+    "name": "Steadiness"
+  },
+  {
+    "skill_id": null,
+    "name": "Stormsoul",
+    "cost": null
+  },
+  {
+    "skill_id": 145,
+    "cost": 9,
+    "name": "Strife"
+  },
+  {
+    "skill_id": 76,
+    "cost": 3,
+    "name": "Stun Resistance"
+  },
+  {
+    "skill_id": 102,
+    "cost": 6,
+    "name": "Teostra Blessing"
+  },
+  {
+    "skill_id": null,
+    "name": "Thunder Alignment",
+    "cost": null
+  },
+  {
+    "skill_id": 16,
+    "cost": 3,
+    "name": "Thunder Attack"
+  },
+  {
+    "skill_id": 63,
+    "cost": 6,
+    "name": "Tremor Resistance"
+  },
+  {
+    "skill_id": 126,
+    "cost": 12,
+    "name": "Tune-Up"
+  },
+  {
+    "skill_id": 105,
+    "cost": 6,
+    "name": "Wall Runner"
+  },
+  {
+    "skill_id": 129,
+    "cost": 3,
+    "name": "Wall Runner (Boost)"
+  },
+  {
+    "skill_id": 14,
+    "cost": 3,
+    "name": "Water Attack"
+  },
+  {
+    "skill_id": 8,
+    "cost": 15,
+    "name": "Weakness Exploit"
+  },
+  {
+    "skill_id": 89,
+    "cost": 3,
+    "name": "Wide-Range"
+  },
+  {
+    "skill_id": null,
+    "name": "Wind Alignment",
+    "cost": null
+  },
+  {
+    "skill_id": 138,
+    "cost": 9,
+    "name": "Wind Mantle"
+  },
+  {
+    "skill_id": 62,
+    "cost": 3,
+    "name": "Windproof"
+  },
+  {
+    "skill_id": 104,
+    "cost": 9,
+    "name": "Wirebug Whisperer"
+  }
+]

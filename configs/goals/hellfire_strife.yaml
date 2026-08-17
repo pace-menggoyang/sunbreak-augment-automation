@@ -1,0 +1,71 @@
+# Mail of Hellfire + Strife build.
+#
+# Two "anchor" skills (Mail of Hellfire, Strife), each independently
+# accepted under either of these conditions:
+#   - the anchor alone reaches level 2 (any other gains -- pool skills or
+#     the other anchor -- are fine alongside it, just not required), OR
+#   - the anchor reaches level 1 plus exactly one companion skill at
+#     level 1, where the companion can be the OTHER anchor or anything in
+#     the bonus pool below.
+#
+# Blood Awakening must never be touched (removed or reduced), under any
+# profile -- this is checked globally, before profiles are considered.
+name: hellfire-strife
+
+augment_type: skills_plus
+
+protected_skills:
+  - Blood Awakening
+
+profiles:
+  - name: hellfire-double-level
+    required_skills:
+      - name: Mail of Hellfire
+        min_level: 2
+    allowed_additional_skills:
+      - Strife
+      - Critical Element
+      - Element Exploit
+      - Maximum Might
+      - Master's Touch
+      - Wind Mantle
+    min_additional_skills: 0
+
+  - name: strife-double-level
+    required_skills:
+      - name: Strife
+        min_level: 2
+    allowed_additional_skills:
+      - Mail of Hellfire
+      - Critical Element
+      - Element Exploit
+      - Maximum Might
+      - Master's Touch
+      - Wind Mantle
+    min_additional_skills: 0
+
+  - name: hellfire-plus-companion
+    required_skills:
+      - name: Mail of Hellfire
+        min_level: 1
+    allowed_additional_skills:
+      - Strife
+      - Critical Element
+      - Element Exploit
+      - Maximum Might
+      - Master's Touch
+      - Wind Mantle
+    min_additional_skills: 1
+
+  - name: strife-plus-companion
+    required_skills:
+      - name: Strife
+        min_level: 1
+    allowed_additional_skills:
+      - Mail of Hellfire
+      - Critical Element
+      - Element Exploit
+      - Maximum Might
+      - Master's Touch
+      - Wind Mantle
+    min_additional_skills: 1

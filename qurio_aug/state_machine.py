@@ -1,0 +1,414 @@
+"""Drives the read -> decide -> act loop from STATE 4 (Augmentation
+Results screen) using capture.py, ocr.py, decision.py, input.py and
+logger.py. See the plan / input.py docstring for the full STATE1..6
+walkthrough this is built on.
+
+Entry point (`run`) assumes you've already manually gotten the game to
+STATE 1 (Material Select, correct armor piece + augment type chosen) --
+menu navigation to get there is out of scope, per the user's design call.
+"""
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+from PIL import Image
+
+from qurio_aug import capture, ocr
+from qurio_aug.decision import Decision, Goal, SkillResult, any_profile_reachable, evaluate
+from qurio_aug.hotkeys import StopRequested
+from qurio_aug.input import POST_PRESS_DELAY, PRESS_HOLD, GameInput
+from qurio_aug.logger import AttemptLogger
+
+# Granularity for _interruptible_sleep -- long waits (settle delay, retry
+# backoff) are broken into chunks this size so a force-stop hotkey (see
+# hotkeys.py) is noticed within ~this long instead of only after the full
+# wait completes.
+STOP_CHECK_INTERVAL = 0.05
+
+
+def _interruptible_sleep(seconds: float, should_stop: Callable[[], bool]) -> None:
+    remaining = seconds
+    while remaining > 0:
+        if should_stop():
+            raise StopRequested()
+        chunk = min(STOP_CHECK_INTERVAL, remaining)
+        time.sleep(chunk)
+        remaining -= chunk
+
+# How long to wait after a roll lands before the first capture, so the
+# "newly changed" sparkle decoration (observed obscuring digits in
+# testing -- see ocr.py) has faded and OCR gets a clean read. Applied
+# inside read_full_roll itself (not by callers) so both the full `run()`
+# loop and a one-shot `evaluate_current_screen` (--dry-run) always get it
+# -- evaluate_current_screen used to default to no wait at all, which was
+# the actual cause of repeated sparkle-related UnreadableRollErrors during
+# dry-run testing even though the roll itself was perfectly readable a
+# moment later. Lower-risk to cut than input.py's POST_PRESS_DELAY: worst
+# case here is one extra UNREADABLE_RETRY_DELAY spent on a retry, not a
+# macro landing mid-transition on the wrong screen -- especially now that
+# debridge recovery (see ocr.py) handles most sparkle contamination
+# without needing a clean frame at all.
+RESULT_SETTLE_DELAY = 0.5
+
+# If a row is STILL unparseable after the initial settle delay (the
+# sparkle can apparently outlast it), retry with a fresh capture a few
+# more times before giving up -- the game state hasn't changed between
+# retries, only time has, which is exactly what a lingering decoration
+# needs. Confirmed live: the panel's red border glow is a continuously
+# *animated* effect (it pulses, it doesn't just fade once like the
+# sparkle), so waiting longer isn't guaranteed to clear it -- sampling
+# more often within the retry window matters more than the window being
+# long. OCR itself is no longer the bottleneck (contaminated reads
+# short-circuit on the run-width check without wasting time on tesseract,
+# and clean "1"s hit the ~600x faster template match), so the delay here
+# is pure wall-clock waiting for the game's animation state to change,
+# not processing time -- more, closer-spaced retries within a similar
+# total window raises the odds of landing between sparkle bursts. Retries
+# have proven rare in practice (0 UnreadableRollErrors across 100 live
+# attempts after the debridge/border-exclusion fixes), so this is tuned
+# for "cheap when it does happen" rather than squeezed for speed.
+UNREADABLE_RETRY_COUNT = 8
+UNREADABLE_RETRY_DELAY = 0.25
+
+MAX_PAGES = 3
+MAX_ATTEMPTS_DEFAULT = 300
+
+LOG_DIR = Path("logs")
+
+
+class UnreadableRollError(RuntimeError):
+    """Raised when a page has content OCR couldn't parse, or the page
+    indicator reports a page count we can't reconcile with what's on
+    screen -- caller should treat this as a hard stop rather than guess
+    and risk a wrong accept/reject action.
+    """
+
+
+def _dump_debug_crops(screenshot: Image.Image, template: list[ocr.RowRegions], page: list[ocr.ParsedRow]) -> list[Path]:
+    """Save the full screenshot plus name/value crops for every unparseable
+    row on an UnreadableRollError, so the failure can be diagnosed from the
+    saved files instead of needing to reproduce it live. Mirrors what
+    calibrate.py saves, but only for the row(s) that actually failed.
+    """
+    LOG_DIR.mkdir(exist_ok=True)
+    # Millisecond precision, not just seconds: with the faster timings now
+    # in place, two separate UnreadableRollErrors can land in the same
+    # clock-second, and second-granularity timestamps used to collide --
+    # confirmed live, where a later failure's row crops silently
+    # overwrote an earlier failure's under the same filename, leaving a
+    # _full.png and its "matching" row crops actually showing two
+    # different captures.
+    stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
+    paths = []
+
+    full_path = LOG_DIR / f"unreadable_{stamp}_full.png"
+    screenshot.save(full_path)
+    paths.append(full_path)
+
+    for i, (row, parsed) in enumerate(zip(template, page)):
+        if not parsed.unparseable:
+            continue
+        for label, box in (("name", row.name_box), ("value", row.value_box)):
+            crop = ocr._crop_fraction(screenshot, box)
+            bbox = ocr._bright_bbox(crop)
+            if bbox is not None:
+                crop = crop.crop(ocr._pad_bbox(bbox, crop))
+            path = LOG_DIR / f"unreadable_{stamp}_row{i}_{label}.png"
+            ocr._upscale(crop).save(path)
+            paths.append(path)
+
+    return paths
+
+
+def _page_skills(page: list[ocr.ParsedRow]) -> list[SkillResult]:
+    return [row.skill for row in page if row.skill is not None]
+
+
+def _read_page_rows(
+    screenshot_fn,
+    template: list[ocr.RowRegions],
+    game: GameInput,
+    window_bounds,
+    protected_skills: frozenset[str] = frozenset(),
+    should_stop: Callable[[], bool] = lambda: False,
+) -> list[ocr.ParsedRow]:
+    """Reads one page, retrying with a fresh capture if a row comes back
+    unparseable -- most commonly caused by the "newly changed" sparkle
+    decoration transiently covering a value digit right after a roll
+    lands (see ocr.py). Only re-raises (with debug crops saved) if it's
+    still unreadable after UNREADABLE_RETRY_COUNT retries.
+
+    Stops retrying early, even with rows still unparseable, the moment a
+    protected skill's loss is already confirmed among the rows that DID
+    parse: decision.py checks protected skills before anything else, so
+    once one is violated the roll is rejected no matter what the still-
+    obscured rows would have said -- resolving them is wasted work. This
+    is why protected_skills is threaded all the way down here rather than
+    only checked by the caller after a page finishes.
+    """
+    game.park_mouse(window_bounds)
+    screenshot = screenshot_fn()
+    page = ocr.read_page(screenshot, template)
+
+    def _already_decided() -> bool:
+        return _protected_violated(_page_skills(page), protected_skills)
+
+    retries = 0
+    while (
+        any(row.unparseable for row in page)
+        and not _already_decided()
+        and retries < UNREADABLE_RETRY_COUNT
+    ):
+        retries += 1
+        _interruptible_sleep(UNREADABLE_RETRY_DELAY, should_stop)
+        game.park_mouse(window_bounds)  # in case a stray cursor (not just a sparkle) is the cause
+        screenshot = screenshot_fn()
+        page = ocr.read_page(screenshot, template)
+
+    if any(row.unparseable for row in page) and not _already_decided():
+        saved = _dump_debug_crops(screenshot, template, page)
+        saved_list = "\n  ".join(str(p) for p in saved)
+        raise UnreadableRollError(
+            f"a skill row still couldn't be parsed after {UNREADABLE_RETRY_COUNT} "
+            "retries -- refusing to guess. Saved for inspection:\n  " + saved_list
+        )
+    return page
+
+
+def _protected_violated(results: list[SkillResult], protected_skills: frozenset[str]) -> bool:
+    return any(r.name in protected_skills and r.is_loss for r in results)
+
+
+def read_full_roll(
+    screenshot_fn,
+    game: GameInput,
+    region_config: ocr.RegionConfig,
+    window_bounds,
+    goal: Goal,
+    settle_delay: float = RESULT_SETTLE_DELAY,
+    should_stop: Callable[[], bool] = lambda: False,
+) -> list[SkillResult]:
+    """Pages through the skill list (Q/E) reading pages until either
+    everything decision-relevant has been seen, or a page 2+ read can be
+    skipped outright -- see the early-exit rules below, all confirmed
+    safe with the user rather than assumed:
+
+    - Gained/increased skills are capped at 3 per roll, exactly page 1's
+      display capacity, so they can *never* land on page 2+ (a roll can
+      touch at most 5 skills total -- up to 3 gains plus the 2 the armor
+      can carry pre-existing -- and gains are always what's shown first).
+      So once page 1 is read, there's nothing further to learn from later
+      pages for matching a goal's required/bonus skills -- and if page 1's
+      gains alone already can't satisfy *any* profile's required_skills
+      (see decision.any_profile_reachable), the roll is doomed regardless
+      of what page 2+ contains, so it's skipped outright even if
+      protected_skills is configured.
+    - Otherwise, the only thing later pages can add is more *removed*
+      skills. Those only matter if `goal.protected_skills` is non-empty
+      (decision.py ignores non-protected losses entirely) -- so:
+        - if protected_skills is empty, page 2+ is skipped unconditionally
+          (its only possible content is decision-irrelevant), and
+        - if protected_skills is non-empty but a violation already turned
+          up on an earlier page, remaining pages are skipped too (the
+          roll is already rejected no matter what they contain -- this
+          check happens *within* a page too, in _read_page_rows, so a
+          confirmed violation also cuts short retrying other still-
+          obscured rows on the same page).
+      Otherwise (some profile still reachable, protected_skills
+      configured, no violation seen yet), every remaining page is read --
+      this is the one case where a violation could legitimately be
+      waiting on a later page.
+
+    Pagination is driven by the on-screen "<Q N/M E>" indicator (read via
+    ocr.read_page_indicator) rather than inferred -- its absence means a
+    single page; when present it tells us exactly how many pages exist,
+    which layout template to use for page 1 (first_of_multi, since the
+    Defense/Slots/Resistance rows are still shown there) vs page 2+
+    (continuation, which are not). MAX_PAGES is a sanity cap in case the
+    indicator is ever misread as an implausible count.
+
+    Waits settle_delay (default RESULT_SETTLE_DELAY) and parks the mouse
+    cursor clear of the result panels (see GameInput.park_mouse) before
+    the first capture, applied here (rather than left to callers) so both
+    the autonomous loop and a one-shot --dry-run evaluation always get it.
+
+    Always leaves the game back on page 1 of STATE4 before returning.
+    """
+    game.park_mouse(window_bounds)
+    _interruptible_sleep(settle_delay, should_stop)
+
+    results: list[SkillResult] = []
+    screenshot = screenshot_fn()
+
+    indicator = ocr.read_page_indicator(screenshot, region_config)
+    if indicator is None:
+        page = _read_page_rows(
+            screenshot_fn, region_config.row_templates["single_page"], game, window_bounds,
+            goal.protected_skills, should_stop,
+        )
+        results.extend(_page_skills(page))
+        return results
+
+    current, total = indicator
+    if current != 1:
+        raise UnreadableRollError(
+            f"expected to start pagination on page 1, but the indicator "
+            f"reads {current}/{total} -- game state doesn't match assumptions"
+        )
+    if total > MAX_PAGES:
+        raise UnreadableRollError(
+            f"page indicator reports {total} pages, above the sanity cap "
+            f"of {MAX_PAGES} -- likely a misread, refusing to guess"
+        )
+
+    page = _read_page_rows(
+        screenshot_fn, region_config.row_templates["first_of_multi"], game, window_bounds,
+        goal.protected_skills, should_stop,
+    )
+    page1_results = _page_skills(page)
+    results.extend(page1_results)
+
+    already_rejected = _protected_violated(page1_results, goal.protected_skills)
+    doomed = not already_rejected and not any_profile_reachable(goal.profiles, page1_results)
+    next_page_presses = 0
+    if not already_rejected and not doomed and goal.protected_skills:
+        for _ in range(total - 1):
+            game.next_page()
+            next_page_presses += 1
+            page = _read_page_rows(
+                screenshot_fn, region_config.row_templates["continuation"], game, window_bounds,
+                goal.protected_skills, should_stop,
+            )
+            page_results = _page_skills(page)
+            results.extend(page_results)
+            if _protected_violated(page_results, goal.protected_skills):
+                break  # already rejected -- no need to read further pages
+
+    for _ in range(next_page_presses):
+        game.prev_page()
+
+    return results
+
+
+@dataclass
+class RunResult:
+    accepted: bool
+    attempts: int
+    decision: Decision | None
+    stopped: bool = False  # True if a force-stop hotkey ended the run early
+
+
+def evaluate_current_screen(
+    goal: Goal,
+    *,
+    window_title_hint: str | None = None,
+    region_config: ocr.RegionConfig | None = None,
+    log: AttemptLogger | None = None,
+    press_hold: float = PRESS_HOLD,
+    post_press_delay: float = POST_PRESS_DELAY,
+    settle_delay: float = RESULT_SETTLE_DELAY,
+    should_stop: Callable[[], bool] = lambda: False,
+) -> Decision:
+    """One-shot: read whatever STATE4 roll is currently on screen and
+    evaluate it against `goal`, then stop -- never sends the accept/reject/
+    reroll macros that would actually change game state. Note this can
+    still send Q/E page-turn keypresses if the roll spans multiple pages
+    (there's no way to read content that isn't on screen without paging to
+    it); it always leaves the game back on page 1 of STATE4 afterward.
+    Intended to be invoked once per manually-triggered roll while
+    calibrating/validating OCR + decision logic against the real game,
+    before trusting `run` to drive it unattended (see main.py --dry-run).
+
+    read_full_roll applies its own settle delay (+ retries on an
+    unparseable row) before capturing, so this doesn't need to add one --
+    it used to default to no wait at all, which was the actual cause of
+    repeated sparkle-related UnreadableRollErrors during dry-run testing.
+
+    press_hold/post_press_delay/settle_delay let you tune input timing
+    without editing code (see main.py's matching CLI flags) -- lower
+    values speed up a long run but risk a macro's later keypresses
+    landing mid-transition on the wrong screen, a failure mode that
+    doesn't raise the way an OCR misread does. Validate at a low
+    --max-attempts before trusting a faster setting for a long run.
+
+    should_stop is checked before every keypress and during every wait
+    (see hotkeys.py) -- raises StopRequested if it fires, which this
+    doesn't catch (only `run`'s long loop does; a one-shot evaluation
+    being interrupted mid-page-turn is edge-case enough not to need its
+    own recovery path).
+    """
+    region_config = region_config or ocr.load_region_config()
+    window = capture.find_game_window(window_title_hint or region_config.window_title_hint)
+    game = GameInput(post_press_delay=post_press_delay, press_hold=press_hold, should_stop=should_stop)
+
+    def screenshot_fn() -> Image.Image:
+        return capture.screenshot_window(window)
+
+    roll = read_full_roll(screenshot_fn, game, region_config, window.bounds, goal, settle_delay, should_stop)
+    decision = evaluate(goal, roll)
+    if log is not None:
+        print(log.log(decision))
+    return decision
+
+
+def run(
+    goal: Goal,
+    *,
+    window_title_hint: str | None = None,
+    region_config: ocr.RegionConfig | None = None,
+    max_attempts: int = MAX_ATTEMPTS_DEFAULT,
+    press_hold: float = PRESS_HOLD,
+    post_press_delay: float = POST_PRESS_DELAY,
+    settle_delay: float = RESULT_SETTLE_DELAY,
+    should_stop: Callable[[], bool] = lambda: False,
+) -> RunResult:
+    """Runs the full autonomous reroll loop starting from STATE 1
+    (Material Select, correct armor piece + augment type already chosen)
+    until `goal` is met, max_attempts is hit, or the force-stop hotkey
+    fires: trigger a roll, read it, accept or reroll, repeat -- each
+    reroll cycles all the way back through STATE1 before producing the
+    next STATE4 result. Validate with main.py --dry-run
+    (evaluate_current_screen, called manually per roll) before running
+    this unattended.
+
+    See evaluate_current_screen's docstring for the press_hold /
+    post_press_delay / settle_delay tuning tradeoffs. should_stop is
+    checked before every keypress and during every wait (see hotkeys.py);
+    StopRequested is caught here specifically (not left to propagate) so
+    a mid-run stop returns a normal RunResult(stopped=True) instead of an
+    exception the caller has to handle separately.
+    """
+    region_config = region_config or ocr.load_region_config()
+    window = capture.find_game_window(window_title_hint or region_config.window_title_hint)
+    game = GameInput(post_press_delay=post_press_delay, press_hold=press_hold, should_stop=should_stop)
+    log = AttemptLogger(goal=goal)
+
+    def screenshot_fn() -> Image.Image:
+        return capture.screenshot_window(window)
+
+    decision = None
+    attempt = 0
+    try:
+        game.park_mouse(window.bounds)
+        game.trigger_roll()  # STATE1 -> first STATE4 result
+
+        for attempt in range(1, max_attempts + 1):
+            roll = read_full_roll(
+                screenshot_fn, game, region_config, window.bounds, goal, settle_delay, should_stop,
+            )
+            decision = evaluate(goal, roll)
+            print(log.log(decision))
+
+            if decision.accepted:
+                game.accept_macro()
+                return RunResult(True, attempt, decision)
+            else:
+                game.reroll_macro()
+    except StopRequested:
+        print(f"\nForce-stopped after {attempt} attempt(s).")
+        return RunResult(False, attempt, decision, stopped=True)
+
+    return RunResult(False, max_attempts, decision)
