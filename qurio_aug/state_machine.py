@@ -73,14 +73,6 @@ RESULT_SETTLE_DELAY = 0.5
 UNREADABLE_RETRY_COUNT = 8
 UNREADABLE_RETRY_DELAY = 0.25
 
-# After a next_page() press, confirm the on-screen page indicator actually
-# advanced before trusting a "continuation" template read against whatever
-# it currently shows -- see _wait_for_page. Same retry cadence as
-# UNREADABLE_RETRY_COUNT/DELAY (~2s total): both are absorbing the same
-# kind of "game hasn't caught up yet" wait.
-PAGE_TRANSITION_RETRY_COUNT = 8
-PAGE_TRANSITION_RETRY_DELAY = 0.25
-
 MAX_PAGES = 3
 MAX_ATTEMPTS_DEFAULT = 300
 
@@ -131,44 +123,6 @@ def _dump_debug_crops(screenshot: Image.Image, template: list[ocr.RowRegions], p
     return paths
 
 
-def _wait_for_page(
-    screenshot_fn,
-    region_config: ocr.RegionConfig,
-    expected_page: int,
-    should_stop: Callable[[], bool],
-) -> None:
-    """Confirms the on-screen page indicator actually shows expected_page
-    before the caller trusts a "continuation" template read against
-    whatever's currently displayed.
-
-    Without this, a next_page() press whose transition hasn't visually
-    landed yet gets read anyway -- the "continuation" row boxes then land
-    on real (but wrong-page) content instead of the intended skill rows,
-    which surfaces as a confusing OCR failure (garbled/blank text from
-    real Defense/Slots/Resistance rows, not the skills the error implies)
-    rather than the actual problem. Confirmed live: an UnreadableRollError
-    dump turned out to be page 1's "Slots"/"Water Resistance" rows
-    misread through page 2's row coordinates, with the page indicator
-    still plainly reading 1/2 in the saved screenshot -- next_page() had
-    been pressed, but the transition never (or not yet) took effect.
-    """
-    retries = 0
-    while True:
-        screenshot = screenshot_fn()
-        indicator = ocr.read_page_indicator(screenshot, region_config)
-        if indicator is not None and indicator[0] == expected_page:
-            return
-        if retries >= PAGE_TRANSITION_RETRY_COUNT:
-            got = "no indicator" if indicator is None else f"{indicator[0]}/{indicator[1]}"
-            raise UnreadableRollError(
-                f"expected to land on page {expected_page} after paging, but the "
-                f"indicator still reads {got} after {PAGE_TRANSITION_RETRY_COUNT} "
-                "retries -- the page-turn keypress may not have registered"
-            )
-        retries += 1
-        _interruptible_sleep(PAGE_TRANSITION_RETRY_DELAY, should_stop)
-
-
 def _page_skills(page: list[ocr.ParsedRow]) -> list[SkillResult]:
     return [row.skill for row in page if row.skill is not None]
 
@@ -180,6 +134,8 @@ def _read_page_rows(
     window_bounds,
     protected_skills: frozenset[str] = frozenset(),
     should_stop: Callable[[], bool] = lambda: False,
+    region_config: ocr.RegionConfig | None = None,
+    expected_page: int | None = None,
 ) -> list[ocr.ParsedRow]:
     """Reads one page, retrying with a fresh capture if a row comes back
     unparseable -- most commonly caused by the "newly changed" sparkle
@@ -194,25 +150,53 @@ def _read_page_rows(
     obscured rows would have said -- resolving them is wasted work. This
     is why protected_skills is threaded all the way down here rather than
     only checked by the caller after a page finishes.
+
+    Pass region_config and expected_page (page 2+ reads only, via a
+    "continuation" template) to also confirm, on *every* capture -- not
+    just once before the first attempt -- that the on-screen page
+    indicator actually reads expected_page before trusting template
+    against whatever's currently displayed. Without this re-check on
+    every retry (not just an upfront one), a next_page() press whose
+    transition lands late, or that reverts, can pass an initial check and
+    then still get read against the wrong page on a later retry --
+    confirmed live: exactly this let a "continuation" read land on page
+    1's real "Slots"/"Water Resistance" rows (garbled/blank under page
+    2's row coordinates) with a one-shot pre-check already in place. A
+    persistently wrong page is reported as its own specific error, not a
+    generic unparseable-row one, since the two need different fixes (a
+    stuck page-turn vs. a lingering sparkle/glow decoration).
     """
-    game.park_mouse(window_bounds)
-    screenshot = screenshot_fn()
-    page = ocr.read_page(screenshot, template)
+    def _capture() -> tuple[Image.Image, list[ocr.ParsedRow] | None, tuple[int, int] | None]:
+        game.park_mouse(window_bounds)
+        screenshot = screenshot_fn()
+        if expected_page is not None:
+            indicator = ocr.read_page_indicator(screenshot, region_config)
+            if indicator is None or indicator[0] != expected_page:
+                return screenshot, None, indicator
+        return screenshot, ocr.read_page(screenshot, template), None
+
+    screenshot, page, bad_indicator = _capture()
 
     def _already_decided() -> bool:
-        return _protected_violated(_page_skills(page), protected_skills)
+        return page is not None and _protected_violated(_page_skills(page), protected_skills)
 
     retries = 0
     while (
-        any(row.unparseable for row in page)
+        (page is None or any(row.unparseable for row in page))
         and not _already_decided()
         and retries < UNREADABLE_RETRY_COUNT
     ):
         retries += 1
         _interruptible_sleep(UNREADABLE_RETRY_DELAY, should_stop)
-        game.park_mouse(window_bounds)  # in case a stray cursor (not just a sparkle) is the cause
-        screenshot = screenshot_fn()
-        page = ocr.read_page(screenshot, template)
+        screenshot, page, bad_indicator = _capture()
+
+    if page is None:
+        got = "no indicator" if bad_indicator is None else f"{bad_indicator[0]}/{bad_indicator[1]}"
+        raise UnreadableRollError(
+            f"expected to be on page {expected_page}, but the indicator still "
+            f"reads {got} after {UNREADABLE_RETRY_COUNT} retries -- the page-turn "
+            "keypress may not have registered"
+        )
 
     if any(row.unparseable for row in page) and not _already_decided():
         saved = _dump_debug_crops(screenshot, template, page)
@@ -274,13 +258,15 @@ def read_full_roll(
     which layout template to use for page 1 (first_of_multi, since the
     Defense/Slots/Resistance rows are still shown there) vs page 2+
     (continuation, which are not). MAX_PAGES is a sanity cap in case the
-    indicator is ever misread as an implausible count. Each next_page()
-    press is followed by _wait_for_page confirming the indicator actually
-    advanced before a "continuation" read is trusted -- a page-turn whose
-    transition hasn't landed yet still leaves real page-1 content on
-    screen, which continuation's row coordinates would otherwise silently
-    misread as garbled/blank skill rows instead of failing with a clear
-    "the page-turn didn't register" error.
+    indicator is ever misread as an implausible count. Every page 2+
+    capture -- the first attempt and every retry, not just once up front
+    -- confirms via _read_page_rows's expected_page that the indicator
+    actually shows the page a next_page() press was meant to reach before
+    a "continuation" read is trusted against it: a page-turn whose
+    transition hasn't landed yet (or reverts mid-retry) still leaves real
+    page-1 content on screen, which continuation's row coordinates would
+    otherwise silently misread as garbled/blank skill rows instead of
+    failing with a clear "the page-turn didn't register" error.
 
     Waits settle_delay (default RESULT_SETTLE_DELAY) and parks the mouse
     cursor clear of the result panels (see GameInput.park_mouse) before
@@ -330,10 +316,10 @@ def read_full_roll(
         for page_num in range(2, total + 1):
             game.next_page()
             next_page_presses += 1
-            _wait_for_page(screenshot_fn, region_config, page_num, should_stop)
             page = _read_page_rows(
                 screenshot_fn, region_config.row_templates["continuation"], game, window_bounds,
                 goal.protected_skills, should_stop,
+                region_config=region_config, expected_page=page_num,
             )
             page_results = _page_skills(page)
             results.extend(page_results)

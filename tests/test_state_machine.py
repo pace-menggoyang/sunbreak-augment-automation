@@ -348,7 +348,7 @@ def test_page_transition_that_never_lands_raises_clear_error(monkeypatch):
     # fell through to a "continuation" read against real page-1 content
     # (Slots/Water Resistance rows misread as garbled/blank skill rows),
     # raising a confusing OCR-failure error instead of naming the actual
-    # problem -- see _wait_for_page.
+    # problem -- see _read_page_rows's expected_page handling.
     game = FakeGame()
     script = Script(monkeypatch, [
         ((1, 2), [_row("Artillery"), _row("Diversion"), _row("Critical Boost")]),
@@ -363,6 +363,38 @@ def test_page_transition_that_never_lands_raises_clear_error(monkeypatch):
         assert "page 2" in str(e)
         assert "1/2" in str(e)
     assert game.next_calls == 1  # tried to turn the page once, then gave up
+
+
+def test_page_indicator_reverting_mid_retry_is_caught(monkeypatch):
+    # The gap a *one-shot* pre-check (checked once, before handing off to
+    # a retry loop that never re-checks) would miss: the indicator
+    # correctly shows page 2 on the very first capture, but the row
+    # content on that same capture is unparseable, triggering a retry --
+    # and on that retry, the indicator has reverted to page 1. Every
+    # capture within _read_page_rows must re-verify the indicator, not
+    # just the first one, or this reversion reads as a generic
+    # unparseable-row failure instead of the real "wrong page" problem.
+    calls = {"n": 0}
+
+    def flaky_indicator(screenshot, region_config):
+        calls["n"] += 1
+        return (2, 2) if calls["n"] == 1 else (1, 2)
+
+    monkeypatch.setattr(ocr, "read_page_indicator", flaky_indicator)
+    monkeypatch.setattr(ocr, "read_page", lambda screenshot, template: [_unparseable(), _blank(), _blank()])
+    monkeypatch.setattr(state_machine.time, "sleep", lambda seconds: None)
+
+    game = FakeGame()
+    try:
+        state_machine._read_page_rows(
+            lambda: _FAKE_SCREENSHOT, [], game, DUMMY_WINDOW_BOUNDS,
+            frozenset(), lambda: False,
+            region_config=DUMMY_REGION_CONFIG, expected_page=2,
+        )
+        assert False, "expected UnreadableRollError"
+    except state_machine.UnreadableRollError as e:
+        assert "page 2" in str(e)
+        assert "1/2" in str(e)
 
 
 def test_indicator_not_starting_on_page_1_raises(monkeypatch):
