@@ -27,24 +27,46 @@ No Python or command-line experience needed for this path.
      known false-positive pattern for PyInstaller-built executables, not
      a sign of anything malicious; check your antivirus's quarantine list
      if the exe seems to disappear after download.
-3. Check everything's working before touching the game:
+3. **These are command-line tools, not double-click apps.** Double-clicking
+   `qurio-aug` will briefly flash open a window and immediately close it --
+   that's expected, not broken: it just ran with no arguments, printed an
+   error, and exited. You need to open a terminal yourself and run it from
+   there so the window stays open and you can pass it arguments:
+   - **Windows**: open the Start menu, search for **PowerShell** (Command
+     Prompt also works), and open it. Navigate to the folder you unzipped,
+     e.g.:
+     ```
+     cd C:\Users\you\Downloads\qurio-aug-windows
+     ```
+     Then run commands from there with a `.\` prefix, e.g. `.\qurio-aug.exe --selfcheck`.
+   - **macOS**: open **Terminal** (Applications > Utilities, or Spotlight
+     search for "Terminal"). Navigate to the folder you unzipped, e.g.:
+     ```
+     cd ~/Downloads/qurio-aug-macos
+     ```
+     Then run commands from there with a `./` prefix, e.g. `./qurio-aug --selfcheck`.
+
+   The rest of this guide shows bare commands like `qurio-aug --selfcheck`
+   for brevity -- mentally add the `.\`/`./` prefix (and `.exe` on
+   Windows) for whichever OS you're on.
+4. Check everything's working before touching the game:
    ```
    qurio-aug --selfcheck
    ```
-4. Build a goal config -- what skills to farm for, and what to protect:
+5. Build a goal config -- what skills to farm for, and what to protect:
    ```
    qurio-aug --wizard
    ```
    This asks a series of questions and writes a YAML file to `goals/`
    next to the exe. See "Define a goal" below for the format if you'd
    rather hand-edit one, and `configs/goals/*.yaml` for examples.
-5. Calibrate against your actual window size/resolution (do this once,
+6. Calibrate against your actual window size/resolution (do this once,
    and again if you resize the game window):
    ```
    qurio-aug-calibrate
    ```
    See "Calibration" below for what to check in its output.
-6. Validate the goal against a few real rolls with `--dry-run` (see
+7. Validate the goal against a few real rolls with `--dry-run` (see
    "Validate before trusting it unattended" below), then run it for real.
 
 If something doesn't work, see **Known limitations** below and
