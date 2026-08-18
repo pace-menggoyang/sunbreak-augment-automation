@@ -174,6 +174,7 @@ def test_debridged_digit_reads_correctly_end_to_end():
 
 _FULL_BOX_CONFIG = ocr.RegionConfig(
     page_indicator_box=(0, 0, 1, 1),
+    results_title_box=(0, 0, 1, 1),
     row_templates={"single_page": [], "first_of_multi": [], "continuation": []},
     next_page_key="e",
     prev_page_key="q",
@@ -202,6 +203,24 @@ def test_indicator_region_ambiguous_false_for_single_page_bleedthrough():
 def test_indicator_region_ambiguous_false_when_truly_blank():
     img = Image.new("RGB", (370, 65), (20, 20, 20))
     assert not ocr.indicator_region_ambiguous(img, _FULL_BOX_CONFIG)
+
+
+# --- is_augmentation_results_screen: confirms the game actually landed on
+# STATE4 (Augmentation Results) at all. Fixtures are real crops of the
+# title-box region -- one from a reference screenshot known to show the
+# results screen, one from a real live failure that turned out to
+# genuinely be a different screen (STATE3, "Requires materials... Proceed?")
+# that state_machine had been misreading as an unparseable roll. ---
+
+
+def test_is_augmentation_results_screen_true_for_real_results_screen():
+    img = Image.open(FIXTURES / "results_title_present.png")
+    assert ocr.is_augmentation_results_screen(img, _FULL_BOX_CONFIG)
+
+
+def test_is_augmentation_results_screen_false_for_real_wrong_screen():
+    img = Image.open(FIXTURES / "results_title_wrong_screen.png")
+    assert not ocr.is_augmentation_results_screen(img, _FULL_BOX_CONFIG)
 
 
 # --- _run_tesseract: resilience to a transient pytesseract/tesseract

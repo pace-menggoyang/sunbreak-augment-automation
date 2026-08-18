@@ -237,6 +237,14 @@ def _read_page_rows(
     screenshot (which is exactly how the last several live failures this
     project hit had to be diagnosed, each taking real back-and-forth to
     pin down).
+
+    When region_config is given (regardless of expected_page -- page 1
+    reads pass it too, just not expected_page), a still-unparseable
+    failure also checks ocr.is_augmentation_results_screen before raising,
+    to distinguish "this is the results screen but a row is genuinely
+    unreadable" from "this isn't the results screen at all" -- see that
+    check's own docstring for why it's only ever run here, not on every
+    read.
     """
     page_label = f"page {expected_page}" if expected_page is not None else "page"
 
@@ -281,7 +289,29 @@ def _read_page_rows(
     if any(row.unparseable for row in page) and not _already_decided():
         saved = _dump_debug_crops(screenshot, template, page)
         saved_list = "\n  ".join(str(p) for p in saved)
-        debug_log(f"{page_label}: FAILED -- still unparseable after {UNREADABLE_RETRY_COUNT} retries")
+        # Only checked here, at the point a read is already about to fail
+        # anyway -- not on every capture -- so a successful attempt (the
+        # overwhelming majority) never pays for the extra tesseract call.
+        # Confirmed live: a screenshot saved on exactly this failure once
+        # turned out to be STATE3 ("Requires materials... Proceed?"), not
+        # STATE4 at all -- trigger_roll() (used both to start a run and
+        # inside every reroll_macro()) doesn't confirm it actually landed
+        # on a fresh result before OCR starts trusting what it reads.
+        wrong_screen = (
+            region_config is not None
+            and not ocr.is_augmentation_results_screen(screenshot, region_config)
+        )
+        debug_log(
+            f"{page_label}: FAILED -- still unparseable after {UNREADABLE_RETRY_COUNT} retries"
+            + (" (not even the Augmentation Results screen)" if wrong_screen else "")
+        )
+        if wrong_screen:
+            raise UnreadableRollError(
+                f"a skill row still couldn't be parsed after {UNREADABLE_RETRY_COUNT} retries, "
+                "and this doesn't even look like the Augmentation Results screen -- possibly "
+                "out of materials, a confirmation dialog is still showing, or the game hasn't "
+                "finished transitioning. Saved for inspection:\n  " + saved_list
+            )
         raise UnreadableRollError(
             f"a skill row still couldn't be parsed after {UNREADABLE_RETRY_COUNT} "
             "retries -- refusing to guess. Saved for inspection:\n  " + saved_list
@@ -396,7 +426,7 @@ def read_full_roll(
     if indicator is None:
         page = _read_page_rows(
             screenshot_fn, region_config.row_templates["single_page"], game, window_bounds,
-            goal.protected_skills, should_stop, debug_log=debug_log,
+            goal.protected_skills, should_stop, region_config=region_config, debug_log=debug_log,
         )
         results.extend(_page_skills(page))
         return results
@@ -417,7 +447,7 @@ def read_full_roll(
 
     page = _read_page_rows(
         screenshot_fn, region_config.row_templates["first_of_multi"], game, window_bounds,
-        goal.protected_skills, should_stop, debug_log=debug_log,
+        goal.protected_skills, should_stop, region_config=region_config, debug_log=debug_log,
     )
     page1_results = _page_skills(page)
     results.extend(page1_results)

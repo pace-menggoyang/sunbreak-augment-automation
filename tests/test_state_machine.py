@@ -85,14 +85,22 @@ class Script:
     prev_page()) so the current page tracks its net next_calls -
     prev_calls; omit it for single-page scripts that never navigate,
     where the index is always 0 regardless.
+
+    `results_screen_present` (default True) stubs
+    ocr.is_augmentation_results_screen -- default True means it's never
+    the reason an existing test's error message changes, and it's never
+    a real tesseract call in an otherwise-offline test. Pass False to
+    specifically exercise the "doesn't even look like the results screen"
+    enrichment in _read_page_rows's failure path.
     """
 
-    def __init__(self, monkeypatch, entries, game=None):
+    def __init__(self, monkeypatch, entries, game=None, results_screen_present=True):
         self.entries = entries
         self.calls = 0
         self.game = game
         monkeypatch.setattr(ocr, "read_page_indicator", self._read_page_indicator)
         monkeypatch.setattr(ocr, "read_page", self._read_page)
+        monkeypatch.setattr(ocr, "is_augmentation_results_screen", lambda *a, **kw: results_screen_present)
         # read_full_roll now sleeps for real (settle delay + retry backoff)
         # -- stub it out so these stay fast, unit-level tests.
         monkeypatch.setattr(state_machine.time, "sleep", lambda seconds: None)
@@ -120,6 +128,7 @@ class Script:
 
 DUMMY_REGION_CONFIG = ocr.RegionConfig(
     page_indicator_box=(0, 0, 1, 1),
+    results_title_box=(0, 0, 1, 1),
     row_templates={"single_page": [], "first_of_multi": [], "continuation": []},
     next_page_key="e",
     prev_page_key="q",
@@ -300,6 +309,9 @@ def test_confirmed_violation_short_circuits_retries_for_other_unparseable_rows(m
 
 
 def test_unparseable_row_raises_after_exhausting_retries(monkeypatch):
+    # Default results_screen_present=True -- confirms the generic message
+    # still fires (not the wrong-screen one) when the screen genuinely is
+    # the results screen and it's just a row that won't parse.
     script = Script(monkeypatch, [
         (None, [_row("Artillery"), _unparseable(), _blank()]),
     ])
@@ -309,10 +321,29 @@ def test_unparseable_row_raises_after_exhausting_retries(monkeypatch):
             script.screenshot_fn, game, DUMMY_REGION_CONFIG, DUMMY_WINDOW_BOUNDS, _goal(),
         )
         assert False, "expected UnreadableRollError"
-    except state_machine.UnreadableRollError:
-        pass
+    except state_machine.UnreadableRollError as e:
+        assert "doesn't even look like" not in str(e)
     # 1 initial read + UNREADABLE_RETRY_COUNT retries, all re-capturing
     assert script.calls == 1 + state_machine.UNREADABLE_RETRY_COUNT
+
+
+def test_unparseable_row_on_wrong_screen_gives_specific_error(monkeypatch):
+    # Confirmed live: a saved failure screenshot turned out to be STATE3
+    # ("Requires materials... Proceed?"), not STATE4 at all -- reading
+    # skill rows off a screen that has none produced a generic "couldn't
+    # be parsed" error with no indication of the real problem.
+    script = Script(monkeypatch, [
+        (None, [_unparseable(), _unparseable(), _unparseable()]),
+    ], results_screen_present=False)
+    game = FakeGame()
+    try:
+        state_machine.read_full_roll(
+            script.screenshot_fn, game, DUMMY_REGION_CONFIG, DUMMY_WINDOW_BOUNDS, _goal(),
+        )
+        assert False, "expected UnreadableRollError"
+    except state_machine.UnreadableRollError as e:
+        assert "doesn't even look like the Augmentation Results screen" in str(e)
+        assert "out of materials" in str(e)
 
 
 def test_unparseable_row_recovers_on_retry(monkeypatch):

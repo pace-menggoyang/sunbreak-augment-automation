@@ -71,6 +71,7 @@ from pathlib import Path
 import pytesseract
 import yaml
 from PIL import Image
+from rapidfuzz import fuzz
 
 from qurio_aug.decision import SkillResult
 from qurio_aug.paths import resource_dir
@@ -195,6 +196,7 @@ class RowRegions:
 @dataclass(frozen=True)
 class RegionConfig:
     page_indicator_box: tuple[float, float, float, float]
+    results_title_box: tuple[float, float, float, float]
     row_templates: dict[str, list[RowRegions]]  # "single_page" | "first_of_multi" | "continuation"
     next_page_key: str
     prev_page_key: str
@@ -214,6 +216,7 @@ def load_region_config(path: Path | None = None) -> RegionConfig:
     }
     return RegionConfig(
         page_indicator_box=tuple(raw["page_indicator_box"]),
+        results_title_box=tuple(raw["results_title_box"]),
         row_templates=templates,
         next_page_key=raw["next_page_key"],
         prev_page_key=raw["prev_page_key"],
@@ -621,3 +624,40 @@ def indicator_region_ambiguous(screenshot: Image.Image, config: RegionConfig) ->
         return False
     width_fraction = (bbox[2] - bbox[0]) / crop.width
     return width_fraction > INDICATOR_AMBIGUOUS_WIDTH_FRACTION
+
+
+# ---------------------------------------------------------------------------
+# Screen verification -- confirming we're actually on the Augmentation
+# Results screen (STATE4) at all, as opposed to a state-machine assumption
+# ("trigger_roll() always lands on a fresh result") that turned out to be
+# wrong at least twice in live testing: a screenshot saved on
+# UnreadableRollError once showed "Requires materials and Nz. Proceed?"
+# (STATE3) instead, meaning the code had been trying to read skill rows
+# off a screen that has none.
+
+_RESULTS_TITLE_CONFIG = "--psm 6"  # --psm 7 (used elsewhere) reads this blank; --psm 6 doesn't
+# Below this score (0-100), the crop isn't confidently the "Augmentation
+# Results" banner -- same fuzzy-match convention as
+# skills_db.MIN_MATCH_SCORE. Empirically: a real banner scores 100 despite
+# decorative-glyph noise on both sides from the busy Smithy background art
+# behind it; the real STATE3-not-STATE4 failure that motivated this scored
+# 60. This threshold sits well clear of both.
+RESULTS_TITLE_MATCH_SCORE = 75
+
+
+def is_augmentation_results_screen(screenshot: Image.Image, config: RegionConfig) -> bool:
+    """Whether the "Augmentation Results" dialog title is visible -- present
+    at a fixed position regardless of pagination layout (single_page,
+    first_of_multi, and continuation all show it unchanged), so it's a
+    reliable way to confirm the game actually landed on STATE4 before any
+    row content gets trusted.
+
+    Deliberately not called on every read -- only from
+    state_machine._read_page_rows's already-exhausted-retries failure
+    path, so a successful attempt (the overwhelming majority) never pays
+    for an extra tesseract call it doesn't need. See that call site for
+    why this doesn't cost anything on the happy path.
+    """
+    crop = _crop_fraction(screenshot, config.results_title_box)
+    text = _run_tesseract(_upscale(crop, UPSCALE), config=_RESULTS_TITLE_CONFIG)
+    return fuzz.partial_ratio("augmentation results", text.lower()) >= RESULTS_TITLE_MATCH_SCORE

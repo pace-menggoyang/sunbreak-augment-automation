@@ -56,6 +56,12 @@ def main() -> None:
     screenshot.save(full_path)
     print(f"saved full screenshot -> {full_path} ({screenshot.size[0]}x{screenshot.size[1]})")
 
+    title_crop = ocr._crop_fraction(screenshot, region_config.results_title_box)
+    title_crop.save(LOG_DIR / "calibration_results_title.png")
+    title_ok = ocr.is_augmentation_results_screen(screenshot, region_config)
+    print(f"'Augmentation Results' title check: {'PASS' if title_ok else 'FAIL -- adjust results_title_box'}")
+    print(f"  crop -> {LOG_DIR / 'calibration_results_title.png'}")
+
     indicator_crop = ocr._crop_fraction(screenshot, region_config.page_indicator_box)
     indicator_crop.save(LOG_DIR / "calibration_page_indicator.png")
     indicator = ocr.read_page_indicator(screenshot, region_config)

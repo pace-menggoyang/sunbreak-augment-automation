@@ -31,6 +31,15 @@ window_title_hint: "Monster Hunter Rise"  # substring used to find the game wind
 # means the roll fits on a single page.
 page_indicator_box: [0.4401, 0.2052, 0.5690, 0.2454]
 
+# The "Augmentation Results" dialog title -- present at a fixed position
+# regardless of pagination layout, used to confirm the game actually
+# landed on the results screen at all (see ocr.is_augmentation_results_screen
+# and state_machine._read_page_rows). Not calibrated as tightly as the
+# other boxes since a busy background is expected here (this sits over the
+# Smithy scene, not a plain panel) -- ocr.py fuzzy-matches the OCR'd text
+# rather than requiring an exact/clean read.
+results_title_box: [0.28, 0.095, 0.46, 0.165]
+
 # Three distinct layouts, since the skill rows land in different places
 # depending on pagination state (see ocr.py's module docstring):
 row_templates:
