@@ -1,6 +1,11 @@
 """CLI entry point.
 
 Usage:
+  # Don't know where to start? Run with no arguments for an interactive
+  # menu -- this is also what happens if you double-click the compiled
+  # exe, so it doesn't just flash open and close.
+  python -m qurio_aug.main
+
   # Don't have a goal config yet? Build one interactively:
   python -m qurio_aug.main --wizard
 
@@ -27,14 +32,20 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
 
-from qurio_aug import capture, ocr, state_machine
+from qurio_aug import calibrate, capture, ocr, state_machine
 from qurio_aug.goal_config import GoalValidationError, load_goal
 from qurio_aug.goal_wizard import run_wizard
 from qurio_aug.hotkeys import DEFAULT_START_HOTKEY, DEFAULT_STOP_HOTKEY, HotkeyController
 from qurio_aug.input import POST_PRESS_DELAY, PRESS_HOLD
 from qurio_aug.logger import AttemptLogger
 from qurio_aug.tesseract_setup import configure_tesseract, selfcheck
+
+# Where the interactive menu (and --wizard) look for/write goal YAMLs --
+# configs/goals/ ships the bundled examples, goals/ is where the wizard's
+# own output lands (see goal_wizard.py for why those are kept separate).
+_GOAL_SEARCH_DIRS = (Path("configs/goals"), Path("goals"))
 
 # Fallback for --no-hotkeys. Both --dry-run (which may send Q/E to page
 # through a multi-page roll) and the full run send real keystrokes via
@@ -93,6 +104,32 @@ def _list_windows() -> None:
         print(f"owner={w.owner_name!r} title={w.title!r} bounds={w.bounds}")
 
 
+def _select_goal_path() -> str | None:
+    """Lists goal YAMLs from _GOAL_SEARCH_DIRS and lets the user pick one
+    by number, or type/paste a path themselves -- so the interactive menu
+    doesn't require already knowing (or typing out) a file path. Returns
+    None if the user backs out (blank input).
+    """
+    candidates = [p for d in _GOAL_SEARCH_DIRS if d.is_dir() for p in sorted(d.glob("*.yaml"))]
+    if candidates:
+        print("\nAvailable goal configs:")
+        for i, p in enumerate(candidates, 1):
+            print(f"  {i}. {p}")
+    else:
+        print("\nNo goal configs found yet in configs/goals/ or goals/ -- "
+              "build one first with the wizard (option 1).")
+    raw = input("\nPick a number, or paste a path to a goal YAML (blank to cancel): ").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        idx = int(raw)
+        if 1 <= idx <= len(candidates):
+            return str(candidates[idx - 1])
+        print(f"{idx} isn't one of the listed options.")
+        return None
+    return raw  # typed/pasted path, used as-is
+
+
 def _countdown(seconds: float) -> None:
     if seconds <= 0:
         return
@@ -106,7 +143,79 @@ def _countdown(seconds: float) -> None:
     print()
 
 
+def _interactive_menu() -> None:
+    """Zero-arguments fallback -- this is what runs if you double-click
+    the compiled exe (which passes no arguments) instead of it just
+    flashing a window open and closed. Everything here is also reachable
+    via CLI flags for scripting/tuning; this just picks sensible
+    defaults and walks through the same options with prompts instead of
+    needing to know the flags up front.
+    """
+    print("Qurio Augmentation Automation -- interactive menu")
+    print("(command-line flags also work here -- see --help for the full list)")
+    region_config = None
+    while True:
+        print("""
+1. Build a new goal config (wizard)
+2. Calibrate against your window
+3. Test a goal against the current screen (dry-run -- safe, won't accept/reject/reroll)
+4. Start farming with a goal
+5. Run diagnostics (selfcheck)
+6. List visible windows
+0. Exit""")
+        try:
+            choice = input("\nChoose an option: ").strip()
+        except EOFError:
+            return
+        if choice in ("0", "q", "quit", "exit"):
+            return
+        elif choice == "1":
+            run_wizard()
+        elif choice == "2":
+            calibrate.main()
+        elif choice in ("3", "4"):
+            goal_path = _select_goal_path()
+            if goal_path is None:
+                continue
+            try:
+                goal = load_goal(goal_path)
+            except GoalValidationError as e:
+                print(f"goal config problem in {goal_path}:\n{e}", file=sys.stderr)
+                continue
+            except OSError as e:
+                print(f"couldn't read {goal_path}: {e}", file=sys.stderr)
+                continue
+            if region_config is None:
+                region_config = ocr.load_region_config()
+            common_kwargs = dict(
+                window_title_hint=None,
+                region_config=region_config,
+                press_hold=PRESS_HOLD,
+                post_press_delay=POST_PRESS_DELAY,
+                settle_delay=state_machine.RESULT_SETTLE_DELAY,
+            )
+            _run_with_hotkeys(
+                goal, dry_run=(choice == "3"), max_attempts=state_machine.MAX_ATTEMPTS_DEFAULT,
+                common_kwargs=common_kwargs,
+                start_hotkey=DEFAULT_START_HOTKEY, stop_hotkey=DEFAULT_STOP_HOTKEY,
+            )
+        elif choice == "5":
+            _run_selfcheck()
+        elif choice == "6":
+            _list_windows()
+        else:
+            print(f"{choice!r} isn't one of the options above.")
+
+
 def main() -> None:
+    if len(sys.argv) == 1:
+        configure_tesseract()
+        try:
+            _interactive_menu()
+        except KeyboardInterrupt:
+            print()
+        return
+
     parser = argparse.ArgumentParser(description=__doc__)
     goal_source = parser.add_mutually_exclusive_group()
     goal_source.add_argument("--goal", help="path to a goal YAML config")
@@ -229,25 +338,22 @@ def main() -> None:
 
     if args.no_hotkeys:
         _countdown(args.start_delay)
-        _run(args, goal, common_kwargs, should_stop=lambda: False)
-        return
+        sys.exit(_execute(goal, args.dry_run, args.max_attempts, lambda: False, **common_kwargs))
 
-    with HotkeyController(args.start_hotkey, args.stop_hotkey) as hotkeys:
-        mode = "dry-run evaluation" if args.dry_run else "autonomous loop"
-        start_display = _format_hotkey(args.start_hotkey)
-        stop_display = _format_hotkey(args.stop_hotkey)
-        print(
-            f"Ready for {mode}. Get the game positioned, then press "
-            f"{start_display} to start"
-            + ("" if args.dry_run else f" ({stop_display} force-stops at any time)")
-            + "."
-        )
-        hotkeys.wait_for_start()
-        _run(args, goal, common_kwargs, should_stop=hotkeys.stop_requested)
+    sys.exit(_run_with_hotkeys(
+        goal, args.dry_run, args.max_attempts, common_kwargs, args.start_hotkey, args.stop_hotkey,
+    ))
 
 
-def _run(args, goal, common_kwargs, should_stop) -> None:
-    if args.dry_run:
+def _execute(goal, dry_run: bool, max_attempts: int, should_stop, **common_kwargs) -> int:
+    """Runs a dry-run evaluation or the full autonomous loop and returns
+    a process-exit-code-like int (0=accepted, 1=rejected/gave up,
+    2=unreadable error, 130=force-stopped) -- doesn't call sys.exit
+    itself, so both main()'s argparse path (which does, for scripting)
+    and the interactive menu (which just prints and loops back to the
+    menu afterward) can share this.
+    """
+    if dry_run:
         log = AttemptLogger(goal=goal)
         try:
             decision = state_machine.evaluate_current_screen(
@@ -256,26 +362,49 @@ def _run(args, goal, common_kwargs, should_stop) -> None:
         except state_machine.UnreadableRollError as e:
             print(f"UNREADABLE: {e}", file=sys.stderr)
             print(f"Full step-by-step trace: {log._debug_path}", file=sys.stderr)
-            sys.exit(2)
-        sys.exit(0 if decision.accepted else 1)
+            return 2
+        return 0 if decision.accepted else 1
 
     try:
         result = state_machine.run(
-            goal, max_attempts=args.max_attempts, should_stop=should_stop, **common_kwargs,
+            goal, max_attempts=max_attempts, should_stop=should_stop, **common_kwargs,
         )
     except state_machine.UnreadableRollError as e:
         print(f"UNREADABLE, stopping: {e}", file=sys.stderr)
         print(f"Full step-by-step trace: logs/{goal.name}-*.debug.log (most recent)", file=sys.stderr)
-        sys.exit(2)
+        return 2
 
     if result.accepted:
         print(f"\nAccepted after {result.attempts} attempt(s).")
-        sys.exit(0)
+        return 0
     elif result.stopped:
-        sys.exit(130)  # conventional exit code for a user-initiated interrupt
+        print(f"\nStopped after {result.attempts} attempt(s).")
+        return 130  # conventional exit code for a user-initiated interrupt
     else:
         print(f"\nGave up after {result.attempts} attempts without a match.")
-        sys.exit(1)
+        return 1
+
+
+def _run_with_hotkeys(
+    goal, dry_run: bool, max_attempts: int, common_kwargs: dict,
+    start_hotkey: str, stop_hotkey: str,
+) -> int:
+    """Waits for the start hotkey, then runs -- shared by main()'s
+    default (hotkey-driven) CLI path and the interactive menu, so both
+    get the same "position the game, then press to start" UX.
+    """
+    with HotkeyController(start_hotkey, stop_hotkey) as hotkeys:
+        mode = "dry-run evaluation" if dry_run else "autonomous loop"
+        start_display = _format_hotkey(start_hotkey)
+        stop_display = _format_hotkey(stop_hotkey)
+        print(
+            f"Ready for {mode}. Get the game positioned, then press "
+            f"{start_display} to start"
+            + ("" if dry_run else f" ({stop_display} force-stops at any time)")
+            + "."
+        )
+        hotkeys.wait_for_start()
+        return _execute(goal, dry_run, max_attempts, hotkeys.stop_requested, **common_kwargs)
 
 
 if __name__ == "__main__":
