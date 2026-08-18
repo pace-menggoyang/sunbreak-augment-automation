@@ -453,6 +453,91 @@ def test_implausible_page_count_raises(monkeypatch):
         pass
 
 
+# --- The initial page-indicator read (before any row content is looked
+# at) is itself retried when the indicator box has content that looks
+# like a real indicator but didn't parse -- see
+# ocr.indicator_region_ambiguous / state_machine._detect_page_indicator.
+# Without this, a single glow-corrupted frame permanently commits the
+# whole attempt to the "single_page" template with no way to recover,
+# even though 8 rounds of content retries happen afterward -- confirmed
+# live, a genuine two-page roll's row0 landed on the "Skills" section
+# header because single_page's rows sit at a different position than
+# first_of_multi's. ---
+
+
+def test_ambiguous_indicator_is_retried_and_recovers(monkeypatch):
+    # First capture: indicator box has real (glow-corrupted) content that
+    # fails to parse. A fresh capture a moment later reads it cleanly --
+    # confirms the retry recovers the correct page count instead of
+    # permanently committing to single_page after one bad frame.
+    calls = {"n": 0}
+
+    def flaky_indicator(screenshot, region_config):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else (1, 2)
+
+    monkeypatch.setattr(ocr, "read_page_indicator", flaky_indicator)
+    monkeypatch.setattr(ocr, "indicator_region_ambiguous", lambda screenshot, region_config: True)
+    monkeypatch.setattr(
+        ocr, "read_page",
+        lambda screenshot, template: [_row("Artillery"), _row("Diversion"), _row("Critical Boost")],
+    )
+    monkeypatch.setattr(state_machine.time, "sleep", lambda seconds: None)
+
+    game = FakeGame()
+    results = state_machine.read_full_roll(
+        lambda: _FAKE_SCREENSHOT, game, DUMMY_REGION_CONFIG, DUMMY_WINDOW_BOUNDS, _goal(),
+    )
+    assert [r.name for r in results] == ["Artillery", "Diversion", "Critical Boost"]
+    assert calls["n"] == 2  # one failed indicator read, one retry that succeeded
+
+
+def test_non_ambiguous_missing_indicator_is_trusted_immediately(monkeypatch):
+    # A genuinely single-page roll's indicator box either has nothing in
+    # it, or (per ocr.indicator_region_ambiguous) only a narrow sliver of
+    # an adjacent row bleeding in -- shouldn't pay any retry cost just to
+    # rule out the ambiguous-multipage case that doesn't apply here.
+    calls = {"n": 0}
+
+    def indicator_fn(screenshot, region_config):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(ocr, "read_page_indicator", indicator_fn)
+    monkeypatch.setattr(ocr, "indicator_region_ambiguous", lambda screenshot, region_config: False)
+    monkeypatch.setattr(
+        ocr, "read_page", lambda screenshot, template: [_row("Artillery"), _row("Diversion"), _blank()],
+    )
+    monkeypatch.setattr(state_machine.time, "sleep", lambda seconds: None)
+
+    game = FakeGame()
+    results = state_machine.read_full_roll(
+        lambda: _FAKE_SCREENSHOT, game, DUMMY_REGION_CONFIG, DUMMY_WINDOW_BOUNDS, _goal(),
+    )
+    assert [r.name for r in results] == ["Artillery", "Diversion"]
+    assert calls["n"] == 1  # no retries triggered
+
+
+def test_ambiguous_indicator_that_never_resolves_falls_back_to_single_page(monkeypatch):
+    # If the indicator box stays ambiguous through every retry, this
+    # isn't a new hard-failure mode -- it falls back to the same
+    # single_page attempt as before this fix existed, which then lives
+    # or dies on its own (normal unparseable-row handling), rather than
+    # raising its own separate error.
+    monkeypatch.setattr(ocr, "read_page_indicator", lambda screenshot, region_config: None)
+    monkeypatch.setattr(ocr, "indicator_region_ambiguous", lambda screenshot, region_config: True)
+    monkeypatch.setattr(
+        ocr, "read_page", lambda screenshot, template: [_row("Artillery"), _row("Diversion"), _blank()],
+    )
+    monkeypatch.setattr(state_machine.time, "sleep", lambda seconds: None)
+
+    game = FakeGame()
+    results = state_machine.read_full_roll(
+        lambda: _FAKE_SCREENSHOT, game, DUMMY_REGION_CONFIG, DUMMY_WINDOW_BOUNDS, _goal(),
+    )
+    assert [r.name for r in results] == ["Artillery", "Diversion"]
+
+
 # --- Force-stop hotkey support (see hotkeys.py): should_stop is checked
 # during every wait via _interruptible_sleep, and read_full_roll's own
 # settle-delay wait respects it too. ---

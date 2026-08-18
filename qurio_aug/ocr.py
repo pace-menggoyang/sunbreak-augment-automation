@@ -585,3 +585,39 @@ def read_page_indicator(screenshot: Image.Image, config: RegionConfig) -> tuple[
     if current is None or total is None:
         return None
     return current, total
+
+
+# A genuine "<Q N/M E>" indicator, even corrupted, spans most of the
+# indicator box's width (it's a wide compound glyph sequence, calibrated
+# to fill the box). A single-page roll's indicator box isn't simply
+# blank, though -- it can pick up a narrow sliver of an adjacent row's
+# text bleeding in, since single_page's layout shifts everything up to
+# fill the space a real indicator would otherwise occupy. Confirmed
+# empirically: a real (glow-corrupted) indicator measured 83% of the
+# box's width; a single-page roll's Defense-row bleed-through measured
+# 22%. This threshold sits well clear of both.
+INDICATOR_AMBIGUOUS_WIDTH_FRACTION = 0.5
+
+
+def indicator_region_ambiguous(screenshot: Image.Image, config: RegionConfig) -> bool:
+    """True if the indicator box has bright content wide enough to
+    plausibly be a real (if currently unparseable) page indicator, as
+    opposed to being genuinely empty or just a narrow bleed-through from
+    an adjacent row on a real single-page layout.
+
+    Used by state_machine.read_full_roll to decide whether a
+    read_page_indicator() miss is worth retrying (the panel's border
+    glow is a continuously animated effect -- see ocr.py's module
+    docstring -- so a frame that briefly corrupts the indicator's column-
+    run structure enough to misparse it is exactly the kind of transient
+    contamination a fresh capture a moment later usually clears) versus
+    confidently a genuine single-page roll, which shouldn't pay a retry
+    cost on every single attempt just to rule out a case that's actually
+    common.
+    """
+    crop = _crop_fraction(screenshot, config.page_indicator_box)
+    bbox = _bright_bbox(crop)
+    if bbox is None:
+        return False
+    width_fraction = (bbox[2] - bbox[0]) / crop.width
+    return width_fraction > INDICATOR_AMBIGUOUS_WIDTH_FRACTION

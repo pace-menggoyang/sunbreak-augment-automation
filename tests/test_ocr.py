@@ -164,6 +164,46 @@ def test_debridged_digit_reads_correctly_end_to_end():
     assert digit_text == "1"
 
 
+# --- indicator_region_ambiguous: distinguishes a genuine (if
+# glow-corrupted) page indicator from a genuinely single-page roll, whose
+# indicator box can still pick up a narrow sliver of an adjacent row's
+# text (single_page's layout shifts rows up to fill the space a real
+# indicator would occupy). Fixtures are real indicator-box crops pulled
+# from a live failure and a real single-page reference -- a "full box"
+# config makes _crop_fraction a no-op so the fixture is used as-is. ---
+
+_FULL_BOX_CONFIG = ocr.RegionConfig(
+    page_indicator_box=(0, 0, 1, 1),
+    row_templates={"single_page": [], "first_of_multi": [], "continuation": []},
+    next_page_key="e",
+    prev_page_key="q",
+    window_title_hint="dummy",
+)
+
+
+def test_indicator_region_ambiguous_true_for_real_corrupted_indicator():
+    # A genuine two-page roll's indicator, corrupted by the panel's
+    # animated red border glow enough that read_page_indicator couldn't
+    # parse it -- but it's clearly still *there*, spanning most of the
+    # box's width, not a stray fragment.
+    img = Image.open(FIXTURES / "page_indicator_ambiguous.png")
+    assert ocr.indicator_region_ambiguous(img, _FULL_BOX_CONFIG)
+
+
+def test_indicator_region_ambiguous_false_for_single_page_bleedthrough():
+    # A genuinely single-page roll: no real indicator exists, but a
+    # sliver of the row below ("Defense") bleeds into the same box since
+    # single_page's layout sits higher than first_of_multi's. Narrow
+    # enough that it must not be mistaken for a corrupted real indicator.
+    img = Image.open(FIXTURES / "page_indicator_single_page_bleedthrough.png")
+    assert not ocr.indicator_region_ambiguous(img, _FULL_BOX_CONFIG)
+
+
+def test_indicator_region_ambiguous_false_when_truly_blank():
+    img = Image.new("RGB", (370, 65), (20, 20, 20))
+    assert not ocr.indicator_region_ambiguous(img, _FULL_BOX_CONFIG)
+
+
 # --- _run_tesseract: resilience to a transient pytesseract/tesseract
 # subprocess failure, observed live after ~400 rapid sequential OCR calls
 # in one run -- tesseract's temp output file was gone by the time

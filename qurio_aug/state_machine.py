@@ -73,6 +73,23 @@ RESULT_SETTLE_DELAY = 0.5
 UNREADABLE_RETRY_COUNT = 8
 UNREADABLE_RETRY_DELAY = 0.25
 
+# The very first page-indicator check (before any row content is even
+# looked at) used to be a single, unretried read -- if the border glow's
+# animation happened to corrupt it on that one frame (see
+# ocr.indicator_region_ambiguous), read_full_roll permanently committed
+# to the "single_page" template for the whole attempt, never rechecking,
+# even across 8 rounds of (futile) content retries with the wrong
+# template. Confirmed live: a genuinely two-page roll's row0 landed
+# squarely on the "Skills" section header, because first_of_multi's rows
+# sit further down than single_page's to make room for an indicator the
+# code had already decided didn't exist. Same retry cadence as
+# UNREADABLE_RETRY_COUNT/DELAY -- only spent when
+# ocr.indicator_region_ambiguous flags real content that didn't parse,
+# not on every attempt, so a genuinely single-page roll (the common case)
+# isn't taxed for a check it doesn't need.
+INDICATOR_RETRY_COUNT = 8
+INDICATOR_RETRY_DELAY = 0.25
+
 MAX_PAGES = 3
 MAX_ATTEMPTS_DEFAULT = 300
 
@@ -125,6 +142,40 @@ def _dump_debug_crops(screenshot: Image.Image, template: list[ocr.RowRegions], p
 
 def _page_skills(page: list[ocr.ParsedRow]) -> list[SkillResult]:
     return [row.skill for row in page if row.skill is not None]
+
+
+def _detect_page_indicator(
+    screenshot: Image.Image,
+    screenshot_fn,
+    game: GameInput,
+    window_bounds,
+    region_config: ocr.RegionConfig,
+    should_stop: Callable[[], bool],
+    debug_log: Callable[[str], None],
+) -> tuple[Image.Image, tuple[int, int] | None]:
+    """Reads the page indicator from `screenshot`, retrying with fresh
+    captures if the indicator box has content that looks like a real
+    (if currently corrupted) indicator per ocr.indicator_region_ambiguous
+    -- see INDICATOR_RETRY_COUNT for why this matters: without it, a
+    single bad frame permanently commits the whole attempt to the wrong
+    row template. Returns the screenshot actually used alongside the
+    result, since a retry means the caller's next read should use the
+    same (possibly later) screenshot, not the original.
+    """
+    indicator = ocr.read_page_indicator(screenshot, region_config)
+    retries = 0
+    while (
+        indicator is None
+        and ocr.indicator_region_ambiguous(screenshot, region_config)
+        and retries < INDICATOR_RETRY_COUNT
+    ):
+        retries += 1
+        debug_log(f"page indicator: ambiguous (content present but unparsed), retry {retries}/{INDICATOR_RETRY_COUNT}")
+        _interruptible_sleep(INDICATOR_RETRY_DELAY, should_stop)
+        game.park_mouse(window_bounds)
+        screenshot = screenshot_fn()
+        indicator = ocr.read_page_indicator(screenshot, region_config)
+    return screenshot, indicator
 
 
 def _describe_page(page: list[ocr.ParsedRow]) -> str:
@@ -289,7 +340,24 @@ def read_full_roll(
     which layout template to use for page 1 (first_of_multi, since the
     Defense/Slots/Resistance rows are still shown there) vs page 2+
     (continuation, which are not). MAX_PAGES is a sanity cap in case the
-    indicator is ever misread as an implausible count. Every page 2+
+    indicator is ever misread as an implausible count.
+
+    That very first indicator read is itself retried (see
+    _detect_page_indicator/INDICATOR_RETRY_COUNT) when the indicator box
+    has content that looks like a real indicator but didn't parse --
+    without this, a single glow-corrupted frame permanently commits the
+    whole attempt to the "single_page" template (no re-check happens
+    during any later content retry), silently misreading a genuine
+    multi-page roll's row0 as whatever real content sits at
+    single_page's different row position instead of first_of_multi's --
+    confirmed live, that content was the "Skills" section header itself.
+    A genuinely single-page roll's indicator box isn't retried needlessly
+    for this, since ocr.indicator_region_ambiguous only flags content
+    wide enough to plausibly be a real indicator, not the narrow sliver
+    of an adjacent row's text a single-page layout's shifted-up rows can
+    otherwise bleed into that same box.
+
+    Every page 2+
     capture -- the first attempt and every retry, not just once up front
     -- confirms via _read_page_rows's expected_page that the indicator
     actually shows the page a next_page() press was meant to reach before
@@ -321,7 +389,9 @@ def read_full_roll(
     results: list[SkillResult] = []
     screenshot = screenshot_fn()
 
-    indicator = ocr.read_page_indicator(screenshot, region_config)
+    screenshot, indicator = _detect_page_indicator(
+        screenshot, screenshot_fn, game, window_bounds, region_config, should_stop, debug_log,
+    )
     debug_log(f"page indicator: {indicator}")
     if indicator is None:
         page = _read_page_rows(
