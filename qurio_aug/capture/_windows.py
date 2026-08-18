@@ -53,6 +53,24 @@ _WINDOWS_CAPTURE_ERROR = (
     "running this as Administrator too."
 )
 
+# One mss.mss() instance, created lazily and reused for every capture --
+# not one per call. mss's own docs recommend this: on Windows,
+# instantiating it sets up real GDI resources (a device context, a
+# compatible bitmap) under the hood, so creating and tearing one down for
+# every single screenshot (potentially thousands of times over a long
+# run) is real, avoidable overhead on top of whatever risk repeated GDI
+# allocation/deallocation carries under sustained load. No teardown is
+# needed for the lifetime of this process -- it's released when the
+# process exits.
+_sct: mss.mss | None = None
+
+
+def _screen_capture() -> mss.mss:
+    global _sct
+    if _sct is None:
+        _sct = mss.mss()
+    return _sct
+
 
 def _owner_name(hwnd: int) -> str:
     """Best-effort owning-process name -- returns "" rather than raising
@@ -116,8 +134,8 @@ def screenshot_window_raw(window: WindowInfo) -> Image.Image:
     window unobstructed for the duration of a run.
     """
     x, y, w, h = window.bounds
-    with mss.mss() as sct:
-        raw = sct.grab({"left": int(x), "top": int(y), "width": int(w), "height": int(h)})
+    sct = _screen_capture()
+    raw = sct.grab({"left": int(x), "top": int(y), "width": int(w), "height": int(h)})
     img = Image.frombytes("RGB", raw.size, raw.rgb)
     if img.getbbox() is None:
         raise ScreenCapturePermissionError(_WINDOWS_CAPTURE_ERROR)
