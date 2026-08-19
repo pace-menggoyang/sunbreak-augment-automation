@@ -223,6 +223,40 @@ def test_is_augmentation_results_screen_false_for_real_wrong_screen():
     assert not ocr.is_augmentation_results_screen(img, _FULL_BOX_CONFIG)
 
 
+# --- read_page: rows are read concurrently on a thread pool for speed
+# (measured 2x faster on a real page read) -- these confirm that doesn't
+# scramble results across rows or corrupt the shared source image.
+# Fixture is a real 3-row crop with known, distinct content per row
+# (Artillery +1 / Diversion +1 / Critical Boost None), small enough to
+# commit directly rather than depending on the gitignored step-references.
+
+_THREE_ROWS_CONFIG = [
+    ocr.RowRegions((0.0433, 0.0428, 0.6273, 0.2015), (0.6424, 0.1887, 0.9567, 0.3607)),
+    ocr.RowRegions((0.0433, 0.3342, 0.6273, 0.4929), (0.6424, 0.4801, 0.9567, 0.6525)),
+    ocr.RowRegions((0.0433, 0.6256, 0.6273, 0.7852), (0.6424, 0.7852, 0.9567, 0.9572)),
+]
+
+
+def _read_names(img: Image.Image) -> list[str]:
+    page = ocr.read_page(img, _THREE_ROWS_CONFIG)
+    return [p.skill.name if p.skill else ("blank" if p.blank else "UNPARSEABLE") for p in page]
+
+
+def test_read_page_rows_come_back_in_order_not_scrambled_by_threads():
+    # Opens a *fresh* (not yet .load()'d) image each trial, deliberately --
+    # this is exactly what exposed the real bug this test guards against
+    # (see read_page's docstring): multiple threads racing to be the first
+    # to decode a lazily-loaded PIL image corrupted the read entirely
+    # ("image file is truncated"), not just scrambled row order.
+    for _ in range(10):
+        img = Image.open(FIXTURES / "three_rows_reference.png")
+        assert _read_names(img) == ["Artillery", "Diversion", "Critical Boost"]
+
+
+def test_read_page_empty_rows_returns_empty_without_touching_the_image():
+    assert ocr.read_page(Image.new("RGB", (10, 10)), []) == []
+
+
 # --- _run_tesseract: resilience to a transient pytesseract/tesseract
 # subprocess failure, observed live after ~400 rapid sequential OCR calls
 # in one run -- tesseract's temp output file was gone by the time

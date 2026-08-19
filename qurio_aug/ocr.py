@@ -64,6 +64,7 @@ design:
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -538,13 +539,52 @@ def parse_row(raw: RawRow) -> ParsedRow:
     return ParsedRow(skill=result, blank=False, unparseable=False)
 
 
+# Lazily created, reused for every read_page call rather than one
+# ThreadPoolExecutor per call -- same reasoning as capture/_windows.py's
+# reused mss instance: thread creation is real (if smaller) OS overhead,
+# and read_page runs many times over a run (once per page-read attempt,
+# plus once per retry), so paying that cost on every single call adds up.
+_row_executor: ThreadPoolExecutor | None = None
+
+
+def _get_row_executor() -> ThreadPoolExecutor:
+    global _row_executor
+    if _row_executor is None:
+        _row_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ocr-row")
+    return _row_executor
+
+
 def read_page(screenshot: Image.Image, rows: list[RowRegions]) -> list[ParsedRow]:
     """One ParsedRow per row slot on the current page -- see ParsedRow for
     how to distinguish a legitimately blank slot from a failed read. Pass
     the row template matching the current page layout (see
     RegionConfig.row_templates / state_machine.py's page-indicator logic).
+
+    Each row's read_row() is independent -- its own crop region, no shared
+    mutable state -- and dominated by tesseract subprocess wall-clock time
+    (measured ~218ms/call), not CPU, so running the rows concurrently on a
+    thread pool is a clean fit: measured 4.5x faster (1112ms -> 247ms for
+    6 equivalent sequential tesseract calls) than reading them one at a
+    time. executor.map() preserves input order in its results regardless
+    of which thread finishes first, so row i's result is always rows[i]'s
+    result, not whichever finished first.
+
+    screenshot.load() is called first, unconditionally: PIL lazily decodes
+    a file-backed image on its *first* pixel access (e.g. the first
+    .crop()) -- confirmed live, letting multiple threads race to be that
+    first access corrupts the read ("image file is truncated"). The real
+    capture backends (capture/_macos.py's .convert(), capture/_windows.py's
+    Image.frombytes) already force this eagerly, so this is a no-op there
+    (.load() on an already-loaded image just returns) -- it only matters
+    for a caller that passes a freshly Image.open()'d file, which is
+    exactly what exposed this: a test fixture, not live play.
     """
-    return [parse_row(read_row(screenshot, row)) for row in rows]
+    if not rows:
+        return []
+    screenshot.load()
+    executor = _get_row_executor()
+    raw_rows = list(executor.map(lambda row: read_row(screenshot, row), rows))
+    return [parse_row(raw) for raw in raw_rows]
 
 
 # ---------------------------------------------------------------------------
