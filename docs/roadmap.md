@@ -2,7 +2,7 @@
 
 Candidate work for the next milestone(s), ordered high to low priority
 within each tier. Nothing here is committed -- it's a menu to pick from,
-not a plan.
+not a plan. See `CHANGELOG.md` for what's already shipped.
 
 ## High priority
 
@@ -28,31 +28,13 @@ in front of the wider community.
    (#1a) -- both are 5-10 minute checks, not new work, worth doing in the
    same sitting as the rest of the beta testing.
 
-2. **Detect an out-of-materials / stuck state.** Discussed early in this
-   project and deferred; still not built. If materials run out mid-run,
-   the bot currently has no way to notice -- it would just keep failing
-   the same macro sequence. A farming session can run for hours
-   unattended, so silently spinning on a broken macro instead of
-   stopping with a clear message is a real risk, not a hypothetical one.
-
-3. **A general "are we on the screen we expect" safeguard.** The
-   page-indicator verification added this milestone (`_detect_page_indicator`
-   / `_read_page_rows`'s `expected_page`) fixes one specific instance of
-   this class of bug. The same underlying risk exists anywhere else the
-   code assumes a screen transition landed (e.g. after `trigger_roll()`,
-   after `accept_macro()`/`reroll_macro()`) without confirming it. A
-   generalized version of the same technique -- check for an expected
-   on-screen marker before trusting the next read -- would close off
-   whole future bug classes instead of one at a time as they're
-   discovered live.
-
 ## Medium priority
 
 Clear value, no blocking dependency, moderate effort. Mostly about
 lowering friction for non-technical users and for whoever ends up
 supporting them.
 
-4. **Batch a page's Tesseract calls into one subprocess invocation**,
+2. **Batch a page's Tesseract calls into one subprocess invocation**,
    via tesseract's native `imagelist` mode rather than one call per
    name/value crop. The single most-validated performance finding in
    `docs/ocr-performance-research.md` (#4a/#4b): measured ~1.1-1.2x
@@ -62,9 +44,9 @@ supporting them.
    just one clean reference). No new dependency, no Windows-specific
    risk -- ready to implement, not just research; what's left is
    breadth (exercising it against more live sessions), not a known
-   correctness gap.
+   correctness gap. Slated for 0.1.3-beta.
 
-5. **Prototype `tesserocr` via the existing prebuilt Windows wheel.** A
+3. **Prototype `tesserocr` via the existing prebuilt Windows wheel.** A
    much bigger ceiling than the batching item above -- 2.9-6.4x faster
    per call, since it skips subprocess spawning entirely -- but
    genuinely gated on Windows access to verify
@@ -78,7 +60,7 @@ supporting them.
    end users. Pair with item 1's Windows beta testing rather than
    treating as separate work.
 
-6. **Guided/interactive calibration.** Calibrating today means running
+4. **Guided/interactive calibration.** Calibrating today means running
    `qurio-aug-calibrate`, eyeballing saved crop PNGs in `logs/`, and
    hand-editing fractional boxes in `configs/regions.yaml` until they
    line up. This is the last step in the whole flow that still requires
@@ -86,53 +68,53 @@ supporting them.
    confirm "does this look right?", nudge with arrow-key-style input)
    would remove it.
 
-7. **Chain the first-run flow.** The interactive menu (shipped this
-   milestone) offers the right options, but a brand-new user still has
+5. **Chain the first-run flow.** The interactive menu (shipped in
+   0.1.2-beta) offers the right options, but a brand-new user still has
    to know to run them in order: selfcheck, then wizard, then calibrate,
    then dry-run, then start. A "first time setup" menu option that walks
    through that sequence automatically, explaining each step as it goes,
    would remove the remaining "what do I actually do first" confusion.
 
-8. **Edit an existing goal from the menu**, not just create new ones.
+6. **Edit an existing goal from the menu**, not just create new ones.
    The wizard only writes new files; tweaking a level requirement or
    adding a skill to an allowed pool currently means hand-editing YAML.
 
-9. **A "package up my last failure" command.** Bundles the most recent
+7. **A "package up my last failure" command.** Bundles the most recent
    debug log + saved screenshots into one file a community member can
    attach to a bug report, without needing to know which files in `logs/`
    are the relevant ones or how to read them.
 
-10. **Confidence tagging in the debug log.** Right now the debug log
-    records what each row parsed as, but not *how* (template match vs.
-    tesseract vs. debridged-from-contamination vs. a retry that
-    recovered). Surfacing that would make the next live-failure
-    investigation faster than this session's already was -- several of
-    this milestone's fixes started from reasoning backward through
-    screenshots to reconstruct what the OCR pipeline must have done.
+8. **Confidence tagging in the debug log.** Right now the debug log
+   records what each row parsed as, but not *how* (template match vs.
+   tesseract vs. debridged-from-contamination vs. a retry that
+   recovered). Surfacing that would make the next live-failure
+   investigation faster than it otherwise would be -- several fixes so
+   far started from reasoning backward through screenshots to
+   reconstruct what the OCR pipeline must have done.
 
 ## Low priority
 
 Speculative, reactive, or cost money. Worth having on the list, not
 worth prioritizing over the above.
 
-11. **More digit templates.** Only "1" and "2" have the fast pixel-match
-    path today, on the assumption (confirmed by the user's play
-    experience) that augment deltas are always ±1 or ±2. Only becomes
-    necessary if a higher delta is ever actually observed live --
-    reactive work, not proactive.
+9. **More digit templates.** Only "1" and "2" have the fast pixel-match
+   path today, on the assumption (confirmed by the user's play
+   experience) that augment deltas are always ±1 or ±2. Only becomes
+   necessary if a higher delta is ever actually observed live --
+   reactive work, not proactive.
 
-12. **Replace value-text OCR with color + structure analysis.** From
+10. **Replace value-text OCR with color + structure analysis.** From
     `docs/ocr-performance-research.md` #3: the delta's color already
     encodes gain (green) vs. gain-at-max-level (orange) vs. loss/None
     (red), and "None" vs. a numeric loss is distinguishable by run
     structure, without needing OCR at all for the common case. Real,
     measured color separation, no new dependency -- but downgraded from
-    its original "most promising" ranking now that item 4's batching
+    its original "most promising" ranking now that item 2's batching
     turned out to be a bigger, more validated win for less effort;
-    worth revisiting as a complementary optimization after item 4 ships,
+    worth revisiting as a complementary optimization after item 2 ships,
     not before.
 
-13. **Sparkle-contamination-aware retrying.** From
+11. **Sparkle-contamination-aware retrying.** From
     `docs/ocr-performance-research.md` #2: still blocked on missing
     data, not a "just build it" item -- a naive color-based contamination
     filter was already ruled out as unsafe (a real production digit
@@ -143,7 +125,7 @@ worth prioritizing over the above.
     this can't responsibly proceed without a real sample of the target
     scenario.
 
-14. **Self-calibrating OCR thresholds.** `BRIGHT_THRESHOLD`,
+12. **Self-calibrating OCR thresholds.** `BRIGHT_THRESHOLD`,
     `MIN_MATCH_SCORE`, `INDICATOR_AMBIGUOUS_WIDTH_FRACTION`, and similar
     constants are all tuned against captures from one machine's display.
     A future monitor with different gamma/brightness could need
@@ -151,13 +133,13 @@ worth prioritizing over the above.
     cross-machine -- worth revisiting only if a beta tester's failures
     look threshold-related.
 
-15. **A visible progress readout during a long run** (attempt N/max,
+13. **A visible progress readout during a long run** (attempt N/max,
     rough rate, elapsed time) instead of scrolling per-attempt text.
 
-16. **A sound or system notification on accept**, so a long unattended
+14. **A sound or system notification on accept**, so a long unattended
     run doesn't require watching the terminal to notice it finished.
 
-17. **Code signing.** Removes the Gatekeeper/SmartScreen warnings
+15. **Code signing.** Removes the Gatekeeper/SmartScreen warnings
     entirely. Costs real money (~$100-400/yr depending on platform) and
     isn't a code change -- a project/budget decision, not engineering
     work.
