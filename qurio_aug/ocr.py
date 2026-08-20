@@ -63,6 +63,7 @@ design:
 """
 from __future__ import annotations
 
+import fnmatch
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -313,6 +314,30 @@ def _run_tesseract(image: Image.Image, config: str) -> str:
         return pytesseract.image_to_string(image, config=config).strip()
     except (OSError, pytesseract.pytesseract.TesseractError):
         return ""
+    finally:
+        # pytesseract deletes its own temp files after every single call via
+        # glob.iglob(f'{temp_name}*') (temp_name is a fresh tempfile name
+        # each time) -- and glob compiles that pattern through fnmatch,
+        # whose compiled-pattern cache is a process-lifetime
+        # functools.lru_cache(maxsize=32768). Since the pattern is never
+        # the same twice, every single OCR call is a guaranteed cache miss
+        # that permanently occupies one more cache slot -- confirmed via
+        # scripts/bench_memory.py: 30 attempts against a real single-page
+        # capture produced exactly 270 new cache entries and 0 hits.
+        # Bounded (caps out under 32768 entries, tens of MB) rather than
+        # truly unbounded, but it's real, measured growth for zero benefit
+        # (a cache that never hits isn't caching anything) -- clearing it
+        # after every call is essentially free next to a ~100ms+ tesseract
+        # subprocess call, and costs nothing else: the only other .glob()
+        # call in this codebase (_load_digit_templates's one-time template
+        # load) is itself @lru_cache(maxsize=1), so re-populating this
+        # cache's one real entry is negligible. Private API (no public
+        # equivalent exists) -- guarded so a future CPython rename can't
+        # turn this cleanup into a crash on every OCR call.
+        try:
+            fnmatch._compile_pattern.cache_clear()
+        except AttributeError:
+            pass
 
 
 def _ocr_content(img: Image.Image, config: str, upscale: int = UPSCALE) -> tuple[str, tuple[int, int, int, int] | None]:
