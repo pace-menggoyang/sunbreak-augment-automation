@@ -54,7 +54,19 @@ def _cgimage_to_pil(cgimage) -> Image.Image:
     bytes_per_row = Quartz.CGImageGetBytesPerRow(cgimage)
     provider = Quartz.CGImageGetDataProvider(cgimage)
     data = Quartz.CGDataProviderCopyData(provider)
-    buf = bytes(data)
+    # bytes(data) leaks: calling the bytes() constructor on this
+    # PyObjC-bridged CFData object leaks the full backing buffer every
+    # single call (confirmed directly -- an isolated loop of just
+    # CGWindowListCreateImage + CGDataProviderCopyData + bytes(data) grew
+    # current RSS by ~20MB/call, one whole frame, with gc.collect() run
+    # after every iteration; switching only this line to bytearray(data)
+    # made the same loop completely flat over 30 iterations). This is the
+    # real cause of a multi-GB memory climb over a long run -- every
+    # single screenshot on macOS went through this path. bytearray(data)
+    # (or memoryview(data).tobytes(), equally clean) uses the buffer
+    # protocol instead of whatever bytes()'s constructor does
+    # differently for a PyObjC-bridged buffer object.
+    buf = bytearray(data)
     img = Image.frombuffer(
         "RGBA", (width, height), buf, "raw", "BGRA", bytes_per_row, 1
     )
