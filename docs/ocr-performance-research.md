@@ -105,6 +105,19 @@ run needs several retries before a sparkle-obscured digit clears, save
 that debug capture instead of cleaning it up** -- this research can't
 responsibly proceed without a real sample of the target scenario.
 
+**Update (later session): shipped, using exactly that missing data.** A
+community member's debug logs + screenshots provided 5 real captures of
+this exact scenario. Fixed with a color-based approach after all --
+`_attempt_color_debridge` and `_recover_sparkle_contaminated_digit`,
+scoped specifically to *green* digit pixels (G channel measurably
+outweighing R and B) rather than the naive "any bright non-glyph color is
+sparkle" filter ruled out above. That scoping is exactly what sidesteps
+the white-digit-template objection: it only ever fires for a confirmed
+green gain, never for a white/other-colored digit, so a real white
+template being misclassified as contaminated can't happen here. Verified
+end-to-end against all 5 real captures; see the project changelog and
+`qurio_aug/ocr.py` for details.
+
 ## 3. Replace value-text OCR with color + structure (most promising)
 
 While investigating #2, found a better opportunity than originally scoped
@@ -312,6 +325,65 @@ covered: heavy live variability across many different rolls/sessions --
 this is still "validated against a handful of real screenshots," not
 "battle-tested against hundreds of live reads."
 
+### 4c. Implemented, measured, and reverted (this session): a real regression, not a win
+
+Built it -- `_run_tesseract_batch` (raw `subprocess.run` with tesseract's
+`imagelist` mode, bypassing pytesseract for just this path, reusing its
+configured `tesseract_cmd`), `_prepare_content_crop` split out of
+`_ocr_content` so `read_page` could batch prep across a whole page before
+one call, `_finish_row` split out of `read_row` so the non-batchable
+digit-extraction remainder still ran on the thread pool. Correctness held
+up completely: byte-identical `ParsedRow` output against all three real
+captures from #4b (clean, border-glow, continuation-with-a-real-blank-slot)
+plus the 5 real sparkle-contamination captures from #2's actual fix (see
+below) -- all 61 project tests passed.
+
+**Then measured it head-to-head against what's actually shipped, and it's
+slower, not faster:**
+
+```
+old (existing 4-worker thread pool, one tesseract call per crop): 339ms median
+new (batched into one tesseract call via imagelist):              476ms median
+```
+
+10 interleaved trials on the same real page (`step-4-augmentation-result.png`,
+6 crops), low variance on both sides (old: 332-391ms, new: 473-477ms) --
+not noise, a consistent ~1.4x regression.
+
+**Why the earlier estimate was wrong**: the ~1.1-1.2x win in #4a/#4b was
+computed by comparing one batched call's wall-clock against the existing
+threaded implementation's wall-clock, but never isolated *why* the
+threaded version was already fast -- it was measured as a black box. The
+theory (amortizing tesseract's ~50ms fixed per-call startup cost, mostly
+`eng.traineddata` loading) is real, but it only pays off if that fixed
+cost is actually being paid serially. On this dev machine (8 cores, 4
+performance + 4 efficiency), the existing thread pool runs 4 tesseract
+subprocesses concurrently -- each one's ~50ms startup cost overlaps with
+the others' almost entirely, so there's very little serialized fixed
+overhead left to amortize away. Collapsing 6 calls into 1 sequential
+process trades that already-cheap parallelism for a single-threaded run
+that has to process all 6 images one after another inside tesseract
+itself, with nothing else to overlap it against -- a net loss once
+parallelism is already doing the job the batching was meant to do.
+
+**Not necessarily wrong on different hardware.** The original doc flagged,
+as an untested hypothesis, that this might matter more "under
+process-spawn contention on weaker hardware (the Windows target this ships
+to)" -- a machine with fewer cores than the thread pool's 4 workers would
+see less overlap from threading in the first place, changing this
+trade-off's direction. Still completely unverified; no Windows access to
+check it from here. If a low-core-count Windows report ever surfaces real
+per-attempt timing that looks parallelism-starved, this is worth
+revisiting with real data from that machine -- but "try it on faster
+hardware and hope" isn't a plan, and this doc's job is to stop the next
+pass from re-implementing this blind based on the old (wrong, black-box)
+estimate.
+
+**Verdict: dead end on this hardware, reverted, not shipped.** The
+implementation is correct and battle-tested against real captures, but
+correctness was never the question -- speed was, and the honest, measured
+answer on the hardware available here is that it's a regression.
+
 ## 5. Tessdata model variant (fast vs. best) -- checked, no action needed on macOS; Windows unverified
 
 While isolating call overhead, checked which `eng.traineddata` variant is
@@ -383,47 +455,49 @@ doesn't re-derive them from scratch:
 
 ## Recommendation
 
-Priority order if/when this moves from research to implementation:
+Priority order if/when this moves from research to implementation. #2 is
+shipped and #4a/#4b is a closed dead end -- both kept below with their
+outcomes rather than deleted, so neither gets re-investigated blind.
 
-1. **#4a/#4b (batch calls via tesseract's native `imagelist` mode, not a
-   composite image)** -- supersedes the original #4 approach: same
-   amortized-overhead win, simpler (no compositing, no gap-tuning), and
-   avoids two of #4's own caveats for free (byte-identical `--psm 7`
-   output, and blank slots excluded from the batch by construction
-   instead of needing `image_to_data` position-matching). Re-measured
-   against what's actually shipped today (the 4-worker thread pool from
-   the per-row parallelization), the honest win is a more modest
-   **~1.1-1.2x** (~403-432ms -> ~363ms on the reference fixture), not the
-   ~1.79x/2x a sequential-baseline comparison implies -- still worth
-   doing, and may matter more on Windows (fewer concurrent subprocess
-   spawns), but go in with the smaller number as the expectation.
-   **Now the most validated option in this doc**: byte-identical output
-   confirmed against border-glow, continuation-layout, and a real (not
-   synthetic) blank-slot case, on top of the original clean-fixture
-   result (#4b). What's left before implementing is breadth, not
-   remaining unknowns -- exercise it against more live sessions over
-   time, but there's no known correctness gap blocking a first
-   implementation.
-2. **#5 (confirm Windows tessdata variant)** -- essentially free to check
-   (no code change, just inspect the vendored file) next time there's
-   Windows access; do this before investing in tesserocr's build path.
-3. **#1a (`tesserocr` via the existing prebuilt Windows wheel)** -- moved
-   up from last place: `simonflueckiger/tesserocr-windows_build` (the path
-   `tesserocr`'s own README recommends for Windows) already ships
-   self-contained wheels bundling their own tesseract.dll, meaning the
-   CI-build-our-own-wheel spike originally scoped for #1 may not be
+1. **#1a (`tesserocr` via the existing prebuilt Windows wheel)** -- now
+   the top open item, by default: `simonflueckiger/tesserocr-windows_build`
+   (the path `tesserocr`'s own README recommends for Windows) already
+   ships self-contained wheels bundling their own tesseract.dll, meaning
+   the CI-build-our-own-wheel spike originally scoped for #1 may not be
    necessary at all. Still needs an actual Windows test (can't verify
    from macOS) and a license check before vendoring a third-party
    compiled binary, but the risk profile dropped from "build our own
    toolchain, unproven" to "test whether an existing, upstream-endorsed
-   wheel works for us" -- worth a real spike before #4a/#4b is treated as
-   the ceiling, since #1's per-call speedup (2.9-6.4x) is categorically
-   larger than #4a/#4b's (~1.1-1.2x against the real threaded baseline).
-4. **#3 (color + structure for value-text)** -- still promising and still
-   builds on already-proven techniques, but smaller and less certain a
-   win than #4a/#4b now that those have been measured and validated
-   against the real threaded baseline plus messier real captures.
-5. **#2 (sparkle shape detection)** -- still blocked on missing real
-   data; next actionable step is unchanged: capture a genuine
-   retry-dependent example live rather than designing against samples
-   that don't represent the actual problem.
+   wheel works for us" -- and unlike #4a/#4b, its win (2.9-6.4x, skipping
+   subprocess spawning entirely) isn't dependent on how many CPU cores
+   are sitting idle, so it isn't at risk of the same core-count-dependent
+   reversal.
+2. **#5 (confirm Windows tessdata variant)** -- essentially free to check
+   (no code change, just inspect the vendored file) next time there's
+   Windows access; do this before investing in tesserocr's build path.
+3. **#3 (color + structure for value-text)** -- still promising and still
+   builds on already-proven techniques (the same green-channel-dominance
+   check #2's fix below uses, just applied to more of the value read
+   instead of only sparkle recovery).
+4. **#4a/#4b (batch calls via tesseract's native `imagelist` mode) --
+   implemented, measured, reverted; see #4c.** Correct, but ~1.4x
+   *slower* than the already-shipped 4-worker thread pool on the 8-core
+   dev machine this was measured on: the thread pool already overlaps
+   most of tesseract's per-call startup cost across its 4 concurrent
+   subprocesses, leaving little serialized fixed overhead left to
+   amortize by batching into one process. The original estimate was a
+   black-box wall-clock comparison that never isolated why the threaded
+   baseline was already fast -- this is why. Not necessarily wrong on a
+   lower-core-count machine (the untested hypothesis that motivated
+   trying this in the first place), but "try it on different hardware
+   and hope" isn't a plan -- only worth revisiting with real timing data
+   from a machine that's actually parallelism-starved, not blind.
+5. **#2 (sparkle-contamination-aware retrying) -- shipped.** A community
+   member's debug logs + screenshots supplied exactly the missing real
+   data this was blocked on. Fixed with a green-channel-dominance color
+   check scoped specifically to gains (side-stepping the white-digit-
+   template objection that ruled out a naive version of this idea
+   above), covering both a sparkle bridging the sign to the digit and one
+   sitting directly on the digit itself. See `qurio_aug/ocr.py`
+   (`_attempt_color_debridge`, `_recover_sparkle_contaminated_digit`) and
+   the changelog.

@@ -34,22 +34,12 @@ Clear value, no blocking dependency, moderate effort. Mostly about
 lowering friction for non-technical users and for whoever ends up
 supporting them.
 
-2. **Batch a page's Tesseract calls into one subprocess invocation**,
-   via tesseract's native `imagelist` mode rather than one call per
-   name/value crop. The single most-validated performance finding in
-   `docs/ocr-performance-research.md` (#4a/#4b): measured ~1.1-1.2x
-   faster against the already-shipped threaded baseline, with
-   byte-identical output confirmed across three different real captures
-   (border-glow, continuation-layout, and a genuine blank-slot case, not
-   just one clean reference). No new dependency, no Windows-specific
-   risk -- ready to implement, not just research; what's left is
-   breadth (exercising it against more live sessions), not a known
-   correctness gap. Slated for 0.1.3-beta.
-
-3. **Prototype `tesserocr` via the existing prebuilt Windows wheel.** A
-   much bigger ceiling than the batching item above -- 2.9-6.4x faster
-   per call, since it skips subprocess spawning entirely -- but
-   genuinely gated on Windows access to verify
+2. **Prototype `tesserocr` via the existing prebuilt Windows wheel.**
+   2.9-6.4x faster per call, since it skips subprocess spawning
+   entirely, and unlike batching tesseract calls (tried and reverted --
+   see `docs/ocr-performance-research.md` #4c), this win isn't
+   contingent on how many CPU cores happen to be idle. Genuinely gated
+   on Windows access to verify
    (`docs/ocr-performance-research.md` #1a): `simonflueckiger/
    tesserocr-windows_build` ships prebuilt, self-contained wheels
    (recommended by `tesserocr`'s own README as the Windows install
@@ -60,7 +50,7 @@ supporting them.
    end users. Pair with item 1's Windows beta testing rather than
    treating as separate work.
 
-4. **Guided/interactive calibration.** Calibrating today means running
+3. **Guided/interactive calibration.** Calibrating today means running
    `qurio-aug-calibrate`, eyeballing saved crop PNGs in `logs/`, and
    hand-editing fractional boxes in `configs/regions.yaml` until they
    line up. This is the last step in the whole flow that still requires
@@ -68,23 +58,23 @@ supporting them.
    confirm "does this look right?", nudge with arrow-key-style input)
    would remove it.
 
-5. **Chain the first-run flow.** The interactive menu (shipped in
+4. **Chain the first-run flow.** The interactive menu (shipped in
    0.1.2-beta) offers the right options, but a brand-new user still has
    to know to run them in order: selfcheck, then wizard, then calibrate,
    then dry-run, then start. A "first time setup" menu option that walks
    through that sequence automatically, explaining each step as it goes,
    would remove the remaining "what do I actually do first" confusion.
 
-6. **Edit an existing goal from the menu**, not just create new ones.
+5. **Edit an existing goal from the menu**, not just create new ones.
    The wizard only writes new files; tweaking a level requirement or
    adding a skill to an allowed pool currently means hand-editing YAML.
 
-7. **A "package up my last failure" command.** Bundles the most recent
+6. **A "package up my last failure" command.** Bundles the most recent
    debug log + saved screenshots into one file a community member can
    attach to a bug report, without needing to know which files in `logs/`
    are the relevant ones or how to read them.
 
-8. **Confidence tagging in the debug log.** Right now the debug log
+7. **Confidence tagging in the debug log.** Right now the debug log
    records what each row parsed as, but not *how* (template match vs.
    tesseract vs. debridged-from-contamination vs. a retry that
    recovered). Surfacing that would make the next live-failure
@@ -97,24 +87,27 @@ supporting them.
 Speculative, reactive, or cost money. Worth having on the list, not
 worth prioritizing over the above.
 
-9. **More digit templates.** Only "1" and "2" have the fast pixel-match
+8. **More digit templates.** Only "1" and "2" have the fast pixel-match
    path today, on the assumption (confirmed by the user's play
    experience) that augment deltas are always ±1 or ±2. Only becomes
    necessary if a higher delta is ever actually observed live --
    reactive work, not proactive.
 
-10. **Replace value-text OCR with color + structure analysis.** From
-    `docs/ocr-performance-research.md` #3: the delta's color already
-    encodes gain (green) vs. gain-at-max-level (orange) vs. loss/None
-    (red), and "None" vs. a numeric loss is distinguishable by run
-    structure, without needing OCR at all for the common case. Real,
-    measured color separation, no new dependency -- but downgraded from
-    its original "most promising" ranking now that item 2's batching
-    turned out to be a bigger, more validated win for less effort;
-    worth revisiting as a complementary optimization after item 2 ships,
-    not before.
+9. **Replace value-text OCR with color + structure analysis.** From
+   `docs/ocr-performance-research.md` #3: the delta's color already
+   encodes gain (green) vs. gain-at-max-level (orange) vs. loss/None
+   (red), and "None" vs. a numeric loss is distinguishable by run
+   structure, without needing OCR at all for the common case. Real,
+   measured color separation, no new dependency, and the same
+   green-channel-dominance technique already shipped for sparkle
+   recovery (see `_is_green_digit_pixel`) extends naturally here.
+   Tesseract call batching (the item that had displaced this in
+   priority) turned out to be a measured regression on real hardware and
+   was reverted -- see `docs/ocr-performance-research.md` #4c -- so this
+   is back to being the most promising remaining OCR speed idea, not a
+   fallback.
 
-11. **Self-calibrating OCR thresholds.** `BRIGHT_THRESHOLD`,
+10. **Self-calibrating OCR thresholds.** `BRIGHT_THRESHOLD`,
     `MIN_MATCH_SCORE`, `INDICATOR_AMBIGUOUS_WIDTH_FRACTION`, and similar
     constants are all tuned against captures from one machine's display.
     A future monitor with different gamma/brightness could need
@@ -122,13 +115,13 @@ worth prioritizing over the above.
     cross-machine -- worth revisiting only if a beta tester's failures
     look threshold-related.
 
-12. **A visible progress readout during a long run** (attempt N/max,
+11. **A visible progress readout during a long run** (attempt N/max,
     rough rate, elapsed time) instead of scrolling per-attempt text.
 
-13. **A sound or system notification on accept**, so a long unattended
+12. **A sound or system notification on accept**, so a long unattended
     run doesn't require watching the terminal to notice it finished.
 
-14. **Code signing.** Removes the Gatekeeper/SmartScreen warnings
+13. **Code signing.** Removes the Gatekeeper/SmartScreen warnings
     entirely. Costs real money (~$100-400/yr depending on platform) and
     isn't a code change -- a project/budget decision, not engineering
     work.
