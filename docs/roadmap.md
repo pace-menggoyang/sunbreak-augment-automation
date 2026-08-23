@@ -114,18 +114,7 @@ worth prioritizing over the above.
     worth revisiting as a complementary optimization after item 2 ships,
     not before.
 
-11. **Sparkle-contamination-aware retrying.** From
-    `docs/ocr-performance-research.md` #2: still blocked on missing
-    data, not a "just build it" item -- a naive color-based contamination
-    filter was already ruled out as unsafe (a real production digit
-    template is white, not green, so it'd misclassify legitimate
-    content). Next actionable step is unchanged from the research doc:
-    next time a live run needs several retries before a sparkle-obscured
-    digit clears, save that debug capture instead of cleaning it up --
-    this can't responsibly proceed without a real sample of the target
-    scenario.
-
-12. **Self-calibrating OCR thresholds.** `BRIGHT_THRESHOLD`,
+11. **Self-calibrating OCR thresholds.** `BRIGHT_THRESHOLD`,
     `MIN_MATCH_SCORE`, `INDICATOR_AMBIGUOUS_WIDTH_FRACTION`, and similar
     constants are all tuned against captures from one machine's display.
     A future monitor with different gamma/brightness could need
@@ -133,13 +122,13 @@ worth prioritizing over the above.
     cross-machine -- worth revisiting only if a beta tester's failures
     look threshold-related.
 
-13. **A visible progress readout during a long run** (attempt N/max,
+12. **A visible progress readout during a long run** (attempt N/max,
     rough rate, elapsed time) instead of scrolling per-attempt text.
 
-14. **A sound or system notification on accept**, so a long unattended
+13. **A sound or system notification on accept**, so a long unattended
     run doesn't require watching the terminal to notice it finished.
 
-15. **Code signing.** Removes the Gatekeeper/SmartScreen warnings
+14. **Code signing.** Removes the Gatekeeper/SmartScreen warnings
     entirely. Costs real money (~$100-400/yr depending on platform) and
     isn't a code change -- a project/budget decision, not engineering
     work.
