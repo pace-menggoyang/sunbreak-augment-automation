@@ -36,10 +36,11 @@ from pathlib import Path
 
 from qurio_aug import calibrate, capture, ocr, state_machine
 from qurio_aug.goal_config import GoalValidationError, load_goal
-from qurio_aug.goal_wizard import run_wizard
+from qurio_aug.goal_wizard import run_editor, run_wizard
 from qurio_aug.hotkeys import DEFAULT_START_HOTKEY, DEFAULT_STOP_HOTKEY, HotkeyController
 from qurio_aug.input import POST_PRESS_DELAY, PRESS_HOLD
 from qurio_aug.logger import AttemptLogger
+from qurio_aug.support_bundle import build_support_bundle
 from qurio_aug.tesseract_setup import configure_tesseract, selfcheck
 
 # Where the interactive menu (and --wizard) look for/write goal YAMLs --
@@ -91,6 +92,18 @@ def _run_selfcheck() -> None:
     except RuntimeError as e:
         print(f"tesseract: FAILED -- {e}", file=sys.stderr)
         sys.exit(1)
+    if sys.platform == "win32":
+        # In-process OCR accelerator (~3.76x measured, see
+        # docs/ocr-performance-research.md #1b) -- optional, so report
+        # its status rather than fail selfcheck over it: a beta tester
+        # seeing "inactive" here explains a slower-than-expected run
+        # without it being an error to chase.
+        if ocr.tesserocr is None:
+            print(f"tesserocr accelerator: inactive (not installed) [{ocr._tesserocr_import_error}]")
+        elif ocr._get_tesserocr_api() is None:
+            print("tesserocr accelerator: inactive (tessdata not found)")
+        else:
+            print("tesserocr accelerator: active")
     windows = capture.find_windows("")
     print(f"visible windows: {len(windows)} (run --list-windows to see them all)")
 
@@ -102,6 +115,16 @@ def _list_windows() -> None:
         return
     for w in windows:
         print(f"owner={w.owner_name!r} title={w.title!r} bounds={w.bounds}")
+
+
+def _run_package_failure() -> None:
+    bundle = build_support_bundle()
+    if bundle is None:
+        print("nothing to package -- no debug log or saved failure screenshots "
+              "found in logs/ yet. Run a dry-run or a real attempt first.")
+        return
+    print(f"wrote {bundle.resolve()}")
+    print("attach this to a bug report on the project's GitHub Issues page.")
 
 
 def _select_goal_path() -> str | None:
@@ -171,11 +194,13 @@ def _interactive_menu() -> None:
     while True:
         print("""
 1. Build a new goal config (wizard)
-2. Calibrate against your window
-3. Test a goal against the current screen (dry-run -- safe, won't accept/reject/reroll)
-4. Start farming with a goal
-5. Run diagnostics (selfcheck)
-6. List visible windows
+2. Edit an existing goal
+3. Calibrate against your window
+4. Test a goal against the current screen (dry-run -- safe, won't accept/reject/reroll)
+5. Start farming with a goal
+6. Run diagnostics (selfcheck)
+7. List visible windows
+8. Package up my last failure (for a bug report)
 0. Exit""")
         try:
             choice = input("\nChoose an option: ").strip()
@@ -186,8 +211,21 @@ def _interactive_menu() -> None:
         elif choice == "1":
             run_wizard()
         elif choice == "2":
+            goal_path = _select_goal_path()
+            if goal_path is None:
+                continue
+            try:
+                goal = load_goal(goal_path)
+            except GoalValidationError as e:
+                print(f"goal config problem in {goal_path}:\n{e}", file=sys.stderr)
+                continue
+            except OSError as e:
+                print(f"couldn't read {goal_path}: {e}", file=sys.stderr)
+                continue
+            run_editor(goal, Path(goal_path))
+        elif choice == "3":
             calibrate.main()
-        elif choice in ("3", "4"):
+        elif choice in ("4", "5"):
             goal_path = _select_goal_path()
             if goal_path is None:
                 continue
@@ -202,7 +240,7 @@ def _interactive_menu() -> None:
             if region_config is None:
                 region_config = ocr.load_region_config()
             max_attempts = state_machine.MAX_ATTEMPTS_DEFAULT
-            if choice == "4":
+            if choice == "5":
                 max_attempts = _prompt_max_attempts(state_machine.MAX_ATTEMPTS_DEFAULT)
             common_kwargs = dict(
                 window_title_hint=None,
@@ -212,14 +250,16 @@ def _interactive_menu() -> None:
                 settle_delay=state_machine.RESULT_SETTLE_DELAY,
             )
             _run_with_hotkeys(
-                goal, dry_run=(choice == "3"), max_attempts=max_attempts,
+                goal, dry_run=(choice == "4"), max_attempts=max_attempts,
                 common_kwargs=common_kwargs,
                 start_hotkey=DEFAULT_START_HOTKEY, stop_hotkey=DEFAULT_STOP_HOTKEY,
             )
-        elif choice == "5":
-            _run_selfcheck()
         elif choice == "6":
+            _run_selfcheck()
+        elif choice == "7":
             _list_windows()
+        elif choice == "8":
+            _run_package_failure()
         else:
             print(f"{choice!r} isn't one of the options above.")
 
@@ -261,6 +301,13 @@ def main() -> None:
         help="print every visible window's owner/title/bounds and exit -- use "
         "this to find the right --window value if the game window isn't "
         "being found automatically",
+    )
+    parser.add_argument(
+        "--package-failure", action="store_true",
+        help="bundle the most recent debug log (+ matching .log/.jsonl) and "
+        "the most recent saved failure screenshots from logs/ into one zip, "
+        "and exit -- attach the result to a bug report instead of hunting "
+        "through logs/ by hand",
     )
     parser.add_argument(
         "--dry-run",
@@ -340,12 +387,19 @@ def main() -> None:
         _list_windows()
         return
 
+    if args.package_failure:
+        _run_package_failure()
+        return
+
     if args.wizard:
         run_wizard()
         return
 
     if not args.goal:
-        parser.error("one of --goal, --wizard, --selfcheck, or --list-windows is required")
+        parser.error(
+            "one of --goal, --wizard, --selfcheck, --list-windows, or "
+            "--package-failure is required"
+        )
 
     try:
         goal = load_goal(args.goal)
