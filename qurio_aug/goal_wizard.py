@@ -120,6 +120,34 @@ def _slug(name: str) -> str:
     return slug or "goal"
 
 
+def _goal_to_raw_dict(goal: Goal) -> dict:
+    """The inverse of goal_config._load_profile/load_goal -- shared by
+    run_wizard and run_editor so both write the same shape (and any future
+    schema tweak only needs updating here, not twice).
+    """
+    raw = {
+        "name": goal.name,
+        "augment_type": goal.augment_type,
+    }
+    if goal.protected_skills:
+        raw["protected_skills"] = sorted(goal.protected_skills)
+    raw["profiles"] = []
+    for profile in goal.profiles:
+        p = {}
+        if profile.name:
+            p["name"] = profile.name
+        p["required_skills"] = [
+            {"name": r.name} if r.min_level == 1 else {"name": r.name, "min_level": r.min_level}
+            for r in profile.required_skills
+        ]
+        if profile.allowed_additional_skills:
+            p["allowed_additional_skills"] = sorted(profile.allowed_additional_skills)
+        if profile.min_additional_skills:
+            p["min_additional_skills"] = profile.min_additional_skills
+        raw["profiles"].append(p)
+    return raw
+
+
 def run_wizard() -> Path:
     print("Qurio augmentation goal wizard -- answers build a goal YAML you\n"
           "can review/edit afterward. Press Ctrl+C at any point to cancel.\n")
@@ -154,26 +182,7 @@ def run_wizard() -> Path:
     )
     validate_goal(goal)  # belt-and-suspenders -- a wizard bug shouldn't be trusted any more than a typo would be
 
-    raw = {
-        "name": goal.name,
-        "augment_type": goal.augment_type,
-    }
-    if goal.protected_skills:
-        raw["protected_skills"] = sorted(goal.protected_skills)
-    raw["profiles"] = []
-    for profile in goal.profiles:
-        p = {}
-        if profile.name:
-            p["name"] = profile.name
-        p["required_skills"] = [
-            {"name": r.name} if r.min_level == 1 else {"name": r.name, "min_level": r.min_level}
-            for r in profile.required_skills
-        ]
-        if profile.allowed_additional_skills:
-            p["allowed_additional_skills"] = sorted(profile.allowed_additional_skills)
-        if profile.min_additional_skills:
-            p["min_additional_skills"] = profile.min_additional_skills
-        raw["profiles"].append(p)
+    raw = _goal_to_raw_dict(goal)
 
     GOALS_DIR.mkdir(exist_ok=True)
     out_path = GOALS_DIR / f"{_slug(name)}.yaml"
@@ -182,6 +191,199 @@ def run_wizard() -> Path:
     print(f"\nWrote {out_path.resolve()}")
     print(f"Next: python -m qurio_aug.main --goal {out_path} --dry-run")
     return out_path
+
+
+def _display_goal(goal: Goal) -> None:
+    print(f"\nname: {goal.name}")
+    print(f"augment_type: {goal.augment_type}")
+    print("protected_skills: " + (", ".join(sorted(goal.protected_skills)) or "(none)"))
+    for i, p in enumerate(goal.profiles, 1):
+        label = f" ({p.name})" if p.name else ""
+        print(f"profile {i}{label}:")
+        for r in p.required_skills:
+            print(f"  required: {r.name} (min level {r.min_level})")
+        if p.allowed_additional_skills:
+            print(f"  allowed additional: {', '.join(sorted(p.allowed_additional_skills))} "
+                  f"(min {p.min_additional_skills} required)")
+
+
+def _edit_protected_skills(protected: frozenset[str]) -> frozenset[str]:
+    current = set(protected)
+    while True:
+        print("\nProtected skills: " + (", ".join(sorted(current)) or "(none)"))
+        print("  1. Add a skill\n  2. Remove a skill\n  0. Done")
+        choice = _ask("choice: ")
+        if choice == "1":
+            name = _ask("  skill to protect: ")
+            if name:
+                current.add(_resolve_skill_name(name))
+        elif choice == "2":
+            if not current:
+                print("  nothing to remove.")
+                continue
+            names = sorted(current)
+            for i, n in enumerate(names, 1):
+                print(f"    {i}. {n}")
+            raw = _ask("  remove which number (blank to cancel): ")
+            if raw.isdigit() and 1 <= int(raw) <= len(names):
+                current.discard(names[int(raw) - 1])
+        elif choice in ("0", ""):
+            return frozenset(current)
+        else:
+            print(f"  {choice!r} isn't one of the options above.")
+
+
+def _edit_profile(profile: Profile) -> Profile:
+    required = list(profile.required_skills)
+    allowed = set(profile.allowed_additional_skills)
+    min_additional = profile.min_additional_skills
+    label = profile.name
+
+    while True:
+        print(f"\nEditing profile{f' ({label})' if label else ''}:")
+        for i, r in enumerate(required, 1):
+            print(f"  {i}. {r.name} (min level {r.min_level})")
+        print("  allowed additional: " + (", ".join(sorted(allowed)) or "(none)")
+              + (f" (min {min_additional} required)" if allowed else ""))
+        print("""
+  1. Add a required skill
+  2. Remove a required skill
+  3. Change a required skill's minimum level
+  4. Add an allowed additional skill
+  5. Remove an allowed additional skill
+  6. Change minimum additional skills required
+  7. Rename this profile's label
+  0. Done editing this profile""")
+        choice = _ask("choice: ")
+        if choice == "1":
+            name = _ask("  skill name: ")
+            if name:
+                name = _resolve_skill_name(name)
+                level = _ask_int(f"  minimum level for '{name}'", default=1)
+                required.append(RequiredSkill(name=name, min_level=level))
+        elif choice == "2":
+            if not required:
+                print("  nothing to remove.")
+                continue
+            for i, r in enumerate(required, 1):
+                print(f"    {i}. {r.name}")
+            raw = _ask("  remove which number (blank to cancel): ")
+            if raw.isdigit() and 1 <= int(raw) <= len(required):
+                del required[int(raw) - 1]
+        elif choice == "3":
+            if not required:
+                print("  nothing to change.")
+                continue
+            for i, r in enumerate(required, 1):
+                print(f"    {i}. {r.name} (currently min level {r.min_level})")
+            raw = _ask("  change which number (blank to cancel): ")
+            if raw.isdigit() and 1 <= int(raw) <= len(required):
+                idx = int(raw) - 1
+                new_level = _ask_int(f"  new minimum level for '{required[idx].name}'",
+                                      default=required[idx].min_level)
+                required[idx] = RequiredSkill(name=required[idx].name, min_level=new_level)
+        elif choice == "4":
+            name = _ask("  skill name: ")
+            if name:
+                allowed.add(_resolve_skill_name(name))
+        elif choice == "5":
+            if not allowed:
+                print("  nothing to remove.")
+                continue
+            names = sorted(allowed)
+            for i, n in enumerate(names, 1):
+                print(f"    {i}. {n}")
+            raw = _ask("  remove which number (blank to cancel): ")
+            if raw.isdigit() and 1 <= int(raw) <= len(names):
+                allowed.discard(names[int(raw) - 1])
+        elif choice == "6":
+            min_additional = _ask_int("  minimum additional skills required", default=min_additional)
+        elif choice == "7":
+            label = _ask("  new label (blank to clear): ")
+        elif choice in ("0", ""):
+            if not required:
+                print("  a profile needs at least one required skill -- add one before finishing.")
+                continue
+            return Profile(
+                required_skills=tuple(required),
+                allowed_additional_skills=frozenset(allowed),
+                min_additional_skills=min_additional,
+                name=label,
+            )
+        else:
+            print(f"  {choice!r} isn't one of the options above.")
+
+
+def run_editor(goal: Goal, path: Path) -> None:
+    """Interactive editor for an already-loaded goal, saving back to `path`
+    on exit -- for tweaking a level requirement or adding a skill to an
+    allowed pool without hand-editing YAML. Reuses run_wizard's building
+    blocks (skill-name resolution, int/yes-no prompts) rather than building
+    a Goal from scratch. Ctrl+C at any point discards changes, same
+    convention as run_wizard (propagates out to main()'s top-level catch).
+    """
+    name = goal.name
+    augment_type = goal.augment_type
+    protected = goal.protected_skills
+    profiles = list(goal.profiles)
+
+    print(f"\nEditing {path} -- Ctrl+C at any point discards changes.")
+    while True:
+        _display_goal(Goal(name=name, augment_type=augment_type,
+                            profiles=tuple(profiles), protected_skills=protected))
+        print("""
+1. Edit protected skills
+2. Edit an existing profile
+3. Add a new profile
+4. Remove a profile
+5. Rename goal / change augment type
+0. Save and exit""")
+        choice = _ask("\nChoice: ")
+        if choice == "1":
+            protected = _edit_protected_skills(protected)
+        elif choice == "2":
+            if not profiles:
+                print("  no profiles to edit.")
+                continue
+            for i, p in enumerate(profiles, 1):
+                print(f"    {i}. {p.name or '(unlabeled)'}")
+            raw = _ask("  edit which number (blank to cancel): ")
+            if raw.isdigit() and 1 <= int(raw) <= len(profiles):
+                profiles[int(raw) - 1] = _edit_profile(profiles[int(raw) - 1])
+        elif choice == "3":
+            profiles.append(_ask_profile(len(profiles) + 1))
+        elif choice == "4":
+            if not profiles:
+                print("  no profiles to remove.")
+                continue
+            if len(profiles) == 1:
+                print("  a goal needs at least one profile -- add another before removing this one.")
+                continue
+            for i, p in enumerate(profiles, 1):
+                print(f"    {i}. {p.name or '(unlabeled)'}")
+            raw = _ask("  remove which number (blank to cancel): ")
+            if raw.isdigit() and 1 <= int(raw) <= len(profiles):
+                del profiles[int(raw) - 1]
+        elif choice == "5":
+            new_name = _ask(f"  new goal name (blank to keep {name!r}): ")
+            if new_name:
+                name = new_name
+            new_type = _ask(
+                f"  new augment type -- 'skills_plus' or 'regular' (blank to keep {augment_type!r}): "
+            ).strip().lower()
+            if new_type in ("skills_plus", "regular"):
+                augment_type = new_type
+        elif choice in ("0", ""):
+            break
+        else:
+            print(f"  {choice!r} isn't one of the options above.")
+
+    final_goal = Goal(name=name, augment_type=augment_type,
+                       profiles=tuple(profiles), protected_skills=protected)
+    validate_goal(final_goal)  # belt-and-suspenders, same rationale as run_wizard
+
+    path.write_text(yaml.safe_dump(_goal_to_raw_dict(final_goal), sort_keys=False, default_flow_style=False))
+    print(f"\nSaved changes to {path.resolve()}")
 
 
 if __name__ == "__main__":
