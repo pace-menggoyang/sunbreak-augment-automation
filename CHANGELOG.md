@@ -4,8 +4,13 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this
 project doesn't yet follow strict semantic versioning (it's still beta).
 
-## [Unreleased]
+## [0.1.3-beta] -- 2026-08-23
 
+- Feature: the interactive menu's "start farming" option now prompts for
+  max attempts (blank keeps the default of 300) instead of always using
+  the default with no way to override it short of the CLI's
+  `--max-attempts` flag. Dry-run isn't asked, since it ignores
+  max_attempts entirely.
 - Fix: recover a digit obscured by a bright "newly changed" sparkle that
   never fades, instead of leaving the row permanently unreadable.
   Reported by a community member (debug logs + screenshots of a "Lv +1"
