@@ -4,6 +4,36 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this
 project doesn't yet follow strict semantic versioning (it's still beta).
 
+## [Unreleased]
+
+- Fix: recover a digit obscured by a bright "newly changed" sparkle that
+  never fades, instead of leaving the row permanently unreadable.
+  Reported by a community member (debug logs + screenshots of a "Lv +1"
+  gain staying unparseable across all 8 retries, forcing a manual
+  restart -- confirmed 5 times across ~1,558 logged attempts). The
+  existing sparkle recovery only works when the sparkle is dimmer than
+  the digit; these captures all show one just as bright, which no
+  brightness threshold can separate from the digit itself. Fixed with a
+  color-based check instead (a real digit stroke's green channel
+  measurably outweighs the sparkle's), covering both a sparkle bridging
+  the sign to the digit and one sitting directly on top of it. Verified
+  against all 5 real captures end-to-end -- all now correctly recover
+  "+1".
+- Fix: stop leaking the full pixel buffer of every screenshot on macOS.
+  Converting the captured frame's pixel data with Python's `bytes()`
+  constructor leaked the entire buffer on every single call -- a PyObjC
+  bridging quirk, not a logic bug -- accounting for multiple GB over a
+  long run (a community member's Force Quit dialog showed the process
+  climbing past 6GB). Switching that one conversion to `bytearray()`
+  eliminated it entirely; verified with a 60-capture loop that went
+  completely flat after the fix versus climbing by roughly 1GB before it.
+- Fix: stop leaking one cache slot per OCR call. `pytesseract` deletes
+  its own temp files after every call via a glob pattern that's never
+  the same twice, so Python's `fnmatch` pattern-compile cache grew by
+  one permanently-useless entry per call. Bounded (tens of MB at worst)
+  rather than a major contributor on its own, but real, measured growth
+  for a cache that never once hit -- now cleared after every call.
+
 ## [0.1.2-beta] -- 2026-08-19
 
 - Feature: an interactive numbered menu (wizard, calibrate, dry-run, start
