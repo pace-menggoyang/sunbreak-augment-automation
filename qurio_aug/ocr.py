@@ -531,15 +531,23 @@ def _recover_sparkle_contaminated_digit(img: Image.Image) -> str:
     return _template_match_digit(retightened, min_score=SPARKLE_RECOVERY_MATCH_THRESHOLD) or ""
 
 
-def _ocr_single_digit(img: Image.Image) -> str:
+def _ocr_single_digit(img: Image.Image) -> tuple[str, str]:
     """Read a tight crop expected to contain exactly one digit.
 
     Tries a fast pixel template match first (see _template_match_digit) --
     covers the specific digit(s) actually confirmed to appear, currently
     just "1"/"2". Falls back to trying several tesseract psm modes until
     one gives a clean single-digit result (see _DIGIT_PSM_MODES). Returns
-    "" if nothing matches -- caller should treat that as unparseable, not
-    a guess.
+    ("", "") if nothing matches -- caller should treat that as unparseable,
+    not a guess.
+
+    Returns (digit, source) rather than just the digit -- source records
+    which of the three methods above actually produced it ("template",
+    "tesseract:psmN", or "sparkle-recovery"), threaded back up through
+    RawRow/ParsedRow to state_machine's debug log (see docs/roadmap.md's
+    now-shipped "confidence tagging" item) so a live failure's root cause
+    doesn't have to be reconstructed after the fact from a screenshot --
+    several early fixes in this project started exactly that way.
 
     Tried requiring >=2 psm modes to agree before trusting a digit --
     twice, once universally and once scoped to just digit crops recovered
@@ -557,14 +565,15 @@ def _ocr_single_digit(img: Image.Image) -> str:
     """
     template_match = _template_match_digit(img)
     if template_match is not None:
-        return template_match
+        return template_match, "template"
 
     upscaled = _upscale(img, DIGIT_UPSCALE)
     for psm in _DIGIT_PSM_MODES:
         candidate = _run_tesseract(upscaled, config=f"--psm {psm} {_DIGIT_WHITELIST}")
         if len(candidate) == 1 and candidate.isdigit():
-            return candidate
-    return _recover_sparkle_contaminated_digit(img)
+            return candidate, f"tesseract:psm{psm}"
+    recovered = _recover_sparkle_contaminated_digit(img)
+    return recovered, ("sparkle-recovery" if recovered else "")
 
 
 # ---------------------------------------------------------------------------
@@ -576,6 +585,8 @@ class RawRow:
     value_text: str
     digit_text: str  # OCR'd separately from a tight crop around just the digit
     value_blank: bool
+    digit_source: str = ""  # "template" | "tesseract:psmN" | "sparkle-recovery" | "" (no digit attempted)
+    debridge: str = "none"  # "none" | "color" | "brightness" -- see read_row
 
 
 def select_digit_run(
@@ -732,6 +743,8 @@ def read_row(screenshot: Image.Image, row: RowRegions) -> RawRow:
     value_text, value_bbox = _ocr_content(value_crop, _VALUE_TEXT_CONFIG)
 
     digit_text = ""
+    digit_source = ""
+    debridge = "none"
     if value_bbox is not None and "none" not in value_text.lower():
         runs = _column_runs(value_crop, value_bbox)
         digit_run = select_digit_run(runs, value_crop.width)
@@ -752,8 +765,12 @@ def read_row(screenshot: Image.Image, row: RowRegions) -> RawRow:
                 # falling through to brightness exactly as before --
                 # zero change for every case that isn't this one.
                 recovered = _attempt_color_debridge(value_crop, digit_run, value_bbox)
-                if recovered is None:
+                if recovered is not None:
+                    debridge = "color"
+                else:
                     recovered = _attempt_debridge(value_crop, digit_run, value_bbox)
+                    if recovered is not None:
+                        debridge = "brightness"
                 if recovered is not None:
                     digit_run = recovered
                     run_width = digit_run[1] - digit_run[0]
@@ -765,13 +782,15 @@ def read_row(screenshot: Image.Image, row: RowRegions) -> RawRow:
                 x1 = min(value_crop.width, digit_run[1] + DIGIT_CROP_PADDING)
                 y0 = max(0, value_bbox[1] - DIGIT_CROP_PADDING)
                 y1 = min(value_crop.height, value_bbox[3] + DIGIT_CROP_PADDING)
-                digit_text = _ocr_single_digit(value_crop.crop((x0, y0, x1, y1)))
+                digit_text, digit_source = _ocr_single_digit(value_crop.crop((x0, y0, x1, y1)))
 
     return RawRow(
         name_text=name_text,
         value_text=value_text,
         digit_text=digit_text,
         value_blank=value_bbox is None,
+        digit_source=digit_source,
+        debridge=debridge,
     )
 
 
@@ -796,6 +815,11 @@ class ParsedRow:
     skill: SkillResult | None  # a real result, when both name and value parsed
     blank: bool  # True: this row slot legitimately has nothing in it
     unparseable: bool  # True: there's clearly *something* here but we couldn't read it
+    # Carried through from the RawRow this was parsed from, for debug
+    # logging only (see state_machine._describe_page) -- not used by any
+    # decision logic. "" / "none" when no digit was read (blank/removed row).
+    digit_source: str = ""
+    debridge: str = "none"
 
 
 def parse_row(raw: RawRow) -> ParsedRow:
@@ -816,10 +840,12 @@ def parse_row(raw: RawRow) -> ParsedRow:
     delta, removed = parse_value(raw)
 
     if skill is None or (not removed and delta is None):
-        return ParsedRow(skill=None, blank=False, unparseable=True)
+        return ParsedRow(skill=None, blank=False, unparseable=True,
+                          digit_source=raw.digit_source, debridge=raw.debridge)
 
     result = SkillResult(name=skill.name, delta=delta or 0, removed=removed)
-    return ParsedRow(skill=result, blank=False, unparseable=False)
+    return ParsedRow(skill=result, blank=False, unparseable=False,
+                      digit_source=raw.digit_source, debridge=raw.debridge)
 
 
 # Lazily created, reused for every read_page call rather than one
@@ -903,7 +929,7 @@ def read_page_indicator(screenshot: Image.Image, config: RegionConfig) -> tuple[
         x1 = min(crop.width, run[1] + DIGIT_CROP_PADDING)
         y0 = max(0, bbox[1] - DIGIT_CROP_PADDING)
         y1 = min(crop.height, bbox[3] + DIGIT_CROP_PADDING)
-        text = _ocr_single_digit(crop.crop((x0, y0, x1, y1)))
+        text, _source = _ocr_single_digit(crop.crop((x0, y0, x1, y1)))
         return int(text) if text else None
 
     current = read_digit_run(runs[2])

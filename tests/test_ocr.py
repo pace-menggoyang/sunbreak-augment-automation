@@ -160,8 +160,9 @@ def test_debridged_digit_reads_correctly_end_to_end():
     x1 = min(img.width, recovered[1] + ocr.DIGIT_CROP_PADDING)
     y0 = max(0, value_bbox[1] - ocr.DIGIT_CROP_PADDING)
     y1 = min(img.height, value_bbox[3] + ocr.DIGIT_CROP_PADDING)
-    digit_text = ocr._ocr_single_digit(img.crop((x0, y0, x1, y1)))
+    digit_text, source = ocr._ocr_single_digit(img.crop((x0, y0, x1, y1)))
     assert digit_text == "1"
+    assert source in ("template", "tesseract:psm8", "tesseract:psm7", "tesseract:psm6", "tesseract:psm10")
 
 
 # --- Community-reported bug: a "Lv +1" gain never resolving across all 8
@@ -197,6 +198,7 @@ def test_read_row_recovers_bridged_sparkle_via_color_debridge():
     img = Image.open(FIXTURES / "value_crop_bridged_sparkle_color_recoverable.png")
     raw = ocr.read_row(img, row)
     assert raw.digit_text == "1"
+    assert raw.debridge == "color"  # confidence tagging -- see state_machine._describe_page
 
 
 def test_recover_sparkle_contaminated_digit_cleans_a_narrow_already_correct_run():
@@ -225,6 +227,13 @@ def test_read_row_recovers_sparkle_on_digit_end_to_end():
     img = Image.open(FIXTURES / "value_crop_sparkle_on_digit_recoverable.png")
     raw = ocr.read_row(img, row)
     assert raw.digit_text == "1"
+    # Sparkle sits *on* the digit here, not bridging it to the sign, so
+    # digit_run never exceeds MAX_DIGIT_RUN_WIDTH and neither debridge
+    # function ever fires -- recovery happens inside _ocr_single_digit's
+    # own last-resort path instead. Confidence tagging -- see
+    # state_machine._describe_page.
+    assert raw.debridge == "none"
+    assert raw.digit_source == "sparkle-recovery"
 
 
 def test_is_green_digit_pixel_separates_green_stroke_from_sparkle():
@@ -329,6 +338,22 @@ def test_read_page_rows_come_back_in_order_not_scrambled_by_threads():
 
 def test_read_page_empty_rows_returns_empty_without_touching_the_image():
     assert ocr.read_page(Image.new("RGB", (10, 10)), []) == []
+
+
+def test_clean_page_tags_template_digit_source():
+    # Confidence tagging (see state_machine._describe_page): both gains
+    # here are "+1", which _template_match_digit covers directly, no
+    # tesseract fallback needed either way.
+    img = Image.open(FIXTURES / "three_rows_reference.png")
+    page = ocr.read_page(img, _THREE_ROWS_CONFIG)
+    assert page[0].digit_source == "template"
+    assert page[1].digit_source == "template"
+    assert page[1].debridge == "none"  # row 1's run needs no recovery
+    # Row 0's run *does* need color-debridging even in this "clean"
+    # reference fixture (its sign-to-digit gap is bridged by something
+    # that trips MAX_DIGIT_RUN_WIDTH) -- a real, previously-invisible
+    # finding surfaced by this tagging, not a test bug.
+    assert page[0].debridge == "color"
 
 
 # --- _run_tesseract: resilience to a transient pytesseract/tesseract

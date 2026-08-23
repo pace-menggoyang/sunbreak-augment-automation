@@ -136,6 +136,34 @@ DUMMY_REGION_CONFIG = ocr.RegionConfig(
 )
 
 
+# --- _describe_page / _confidence_tags: what the debug log actually
+# shows for a page -- confirms the "how" tags (digit_source, debridge)
+# appear for a real/unparseable row and are correctly absent for blank
+# rows, which never read a digit at all. ---
+
+
+def test_describe_page_shows_confidence_tags_for_a_real_gain(monkeypatch):
+    row = ocr.ParsedRow(skill=SkillResult("Artillery", delta=1), blank=False, unparseable=False,
+                         digit_source="template", debridge="none")
+    assert state_machine._describe_page([row]) == "Artillery +1 [template]"
+
+
+def test_describe_page_shows_debridge_tag_alongside_source(monkeypatch):
+    row = ocr.ParsedRow(skill=SkillResult("Artillery", delta=1), blank=False, unparseable=False,
+                         digit_source="tesseract:psm8", debridge="color")
+    assert state_machine._describe_page([row]) == "Artillery +1 [tesseract:psm8, debridged:color]"
+
+
+def test_describe_page_blank_row_has_no_confidence_tags(monkeypatch):
+    assert state_machine._describe_page([_blank()]) == "blank"
+
+
+def test_describe_page_unparseable_row_shows_tags_when_present(monkeypatch):
+    row = ocr.ParsedRow(skill=None, blank=False, unparseable=True,
+                         digit_source="sparkle-recovery", debridge="none")
+    assert state_machine._describe_page([row]) == "UNPARSEABLE [sparkle-recovery]"
+
+
 def test_single_page_no_indicator(monkeypatch):
     script = Script(monkeypatch, [
         (None, [_row("Artillery"), _row("Diversion"), _blank()]),

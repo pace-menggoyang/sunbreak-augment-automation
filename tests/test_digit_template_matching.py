@@ -57,12 +57,12 @@ def test_1_and_2_do_not_cross_match():
 
 def test_ocr_single_digit_uses_template_for_1():
     img = Image.open(FIXTURES / "digit_1_sample.png")
-    assert ocr._ocr_single_digit(img) == "1"
+    assert ocr._ocr_single_digit(img) == ("1", "template")
 
 
 def test_ocr_single_digit_uses_template_for_2():
     img = Image.open(FIXTURES / "digit_2_sample.png")
-    assert ocr._ocr_single_digit(img) == "2"
+    assert ocr._ocr_single_digit(img) == ("2", "template")
 
 
 def run_all():

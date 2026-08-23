@@ -178,15 +178,33 @@ def _detect_page_indicator(
     return screenshot, indicator
 
 
+def _confidence_tags(row: ocr.ParsedRow) -> str:
+    """"how", not just "what": which of _ocr_single_digit's three methods
+    actually produced the digit (template match / a specific tesseract psm
+    / last-resort sparkle recovery), and whether a merged run needed
+    debridging first. Blank/removed rows never read a digit at all, so
+    both are empty/"none" there and this returns "". Surfaced so the next
+    live-failure investigation doesn't have to be reverse-engineered from
+    a screenshot the way several earlier ones were -- see docs/roadmap.md.
+    """
+    tags = []
+    if row.digit_source:
+        tags.append(row.digit_source)
+    if row.debridge != "none":
+        tags.append(f"debridged:{row.debridge}")
+    return f" [{', '.join(tags)}]" if tags else ""
+
+
 def _describe_page(page: list[ocr.ParsedRow]) -> str:
     parts = []
     for row in page:
         if row.skill is not None:
-            parts.append(f"{row.skill.name} (removed)" if row.skill.removed else f"{row.skill.name} {row.skill.delta:+d}")
+            base = f"{row.skill.name} (removed)" if row.skill.removed else f"{row.skill.name} {row.skill.delta:+d}"
+            parts.append(base + _confidence_tags(row))
         elif row.blank:
             parts.append("blank")
         else:
-            parts.append("UNPARSEABLE")
+            parts.append("UNPARSEABLE" + _confidence_tags(row))
     return ", ".join(parts)
 
 
