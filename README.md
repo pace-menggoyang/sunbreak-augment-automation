@@ -52,7 +52,10 @@ No Python or command-line experience needed for this path.
 
 If something doesn't work, see **Known limitations** below and
 `docs/windows-beta-checklist.md` before reporting an issue -- most early
-Windows problems are one of the things listed there.
+Windows problems are one of the things listed there. When you do report
+one, menu option 8 (or `qurio-aug --package-failure`) bundles the
+relevant debug log and saved failure screenshots from `logs/` into one
+zip to attach, instead of hunting through the folder by hand.
 
 ## Setup (from source / development)
 
@@ -135,17 +138,20 @@ type already chosen), then:
 qurio-aug --goal configs/goals/your-goal.yaml
 ```
 
-This prints a ready message and waits for **Control+M** rather than firing
-immediately -- position the game window with no time pressure, then press
-Control+M when ready. **Control+N** force-stops a running loop at any point
-(checked before every keypress and during every wait), without needing to
-switch focus back to the terminal -- switching focus mid-run to force a
-stop the old way could leave the game stuck mid-dialog. Pass
-`--start-hotkey`/`--stop-hotkey` to remap either one, or `--no-hotkeys` to
-fall back to a fixed `--start-delay` countdown with no stop hotkey at all.
+This prints a ready message and waits for the **start hotkey** (**Control+M**
+on macOS, **Alt+M** on Windows -- different defaults per platform because
+each avoids a different real collision with the game's own bindings, see
+`qurio_aug/hotkeys.py`) rather than firing immediately -- position the game
+window with no time pressure, then press it when ready. The **stop hotkey**
+(**Control+N** / **Alt+N**) force-stops a running loop at any point (checked
+before every keypress and during every wait), without needing to switch
+focus back to the terminal -- switching focus mid-run to force a stop the
+old way could leave the game stuck mid-dialog. Pass `--start-hotkey`/
+`--stop-hotkey` to remap either one, or `--no-hotkeys` to fall back to a
+fixed `--start-delay` countdown with no stop hotkey at all.
 
 It loops read -> decide -> accept/reroll autonomously until the goal is
-met, `--max-attempts` (default 300) is hit, or Control+N is pressed,
+met, `--max-attempts` (default 300) is hit, or the stop hotkey is pressed,
 logging every attempt to `logs/<goal>-<timestamp>.log` (human-readable)
 and `.jsonl` (structured).
 
@@ -205,17 +211,24 @@ and the vendoring scripts' comments for how that's wired up.
   platform backend each for macOS (Quartz) and Windows (pywin32 + mss),
   plus the shared 16:9 content-rect detection that makes ROI boxes work
   across different window sizes/letterboxing
-- `qurio_aug/ocr.py` -- crop -> digit template match / Tesseract -> parsed skill rows
+- `qurio_aug/ocr.py` -- crop -> digit template match / Tesseract -> parsed
+  skill rows (Windows: OCR calls prefer the in-process `tesserocr`
+  accelerator when available, ~3.76x faster, falling back to the
+  subprocess path otherwise -- see `docs/ocr-performance-research.md` #1b)
 - `qurio_aug/skills_db.py` -- canonical skill list + fuzzy-match OCR noise
 - `qurio_aug/decision.py` -- accept/reject rules (no I/O, unit-testable)
 - `qurio_aug/goal_config.py` -- goal YAML loading + eager skill-name validation
 - `qurio_aug/goal_wizard.py` -- interactive goal-config builder (`--wizard`)
+  and editor for an existing one (interactive menu only, option 2)
 - `qurio_aug/input.py` -- keyboard macros for the confirmed UI flow
-- `qurio_aug/hotkeys.py` -- global start/force-stop hotkeys (Control+M/Control+N)
+- `qurio_aug/hotkeys.py` -- global start/force-stop hotkeys (Control+M/N on
+  macOS, Alt+M/N on Windows)
 - `qurio_aug/state_machine.py` -- wires the above into the full loop
 - `qurio_aug/paths.py` / `qurio_aug/tesseract_setup.py` -- resource-path
   and bundled-Tesseract resolution for both source and compiled runs
 - `qurio_aug/calibrate.py` / `main.py` -- CLI entry points
+- `qurio_aug/support_bundle.py` -- bundles the most recent debug log +
+  failure screenshots from `logs/` into one zip (`--package-failure`)
 - `packaging/` -- PyInstaller spec + per-OS Tesseract vendoring scripts
 - `.github/workflows/build.yml` -- CI: tests + compiled builds on every
   push, published to GitHub Releases on a version tag

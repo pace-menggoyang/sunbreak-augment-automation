@@ -4,6 +4,101 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this
 project doesn't yet follow strict semantic versioning (it's still beta).
 
+## [0.1.4-beta] -- 2026-08-23
+
+First real Windows hardware + live game testing since v0.1.0-beta's
+CI-only verification (see `docs/windows-beta-checklist.md`) -- three real
+bugs found and fixed below; calibration, single- and multi-page OCR,
+pagination, and the decision engine all confirmed working correctly
+against the live game at native 1920x1080. Two real (non-dry-run) farming
+runs also confirmed every macro this tool sends actually lands on real
+Windows hardware: a `--max-attempts 5` run against a real goal confirmed
+the reject/reroll path end-to-end (including a correct real
+protected-skill-violation rejection), and a second run confirmed the
+accept/confirm macro, accepting and applying a real roll on its first
+attempt.
+
+- Fix: `--list-windows` crashing outright (`UnicodeEncodeError`) the
+  moment any visible window's title contains a character outside the
+  console's legacy codepage -- not an edge case in practice (hit
+  immediately from a styled Discord server name and VS Code's own "..."
+  title truncation). Reconfigure stdout/stderr with `errors="replace"`
+  on Windows so an unencodable character prints as "?" instead of
+  crashing the one diagnostic command meant to help find the right
+  `--window` value.
+- Fix: window owner-process matching silently never working on Windows.
+  `_owner_name()` called `win32process.OpenProcess`, which doesn't
+  exist -- the function lives on `win32api`, not `win32process`. Every
+  call raised `AttributeError`, swallowed by a broad `except Exception:
+  return ""`, degrading every match to title-only with no error or
+  indication anything was wrong. Never caught before now because
+  `--selfcheck` (the only thing CI runs against a real Windows machine)
+  never exercises this path. Confirmed live: every window's owner now
+  correctly resolves (e.g. `MonsterHunterRise.exe`) instead of `''`.
+- Fix: the default start/stop hotkeys (Control+M / Control+N) collide
+  with Monster Hunter Rise: Sunbreak's own default Windows control
+  scheme -- bare Control is bound to "Skill Info" and bare Shift to
+  "Compare Equipment" on the Augmentation Results screen itself (visible
+  in its own on-screen button-hint bar). Since pynput's global hotkey
+  listener observes keystrokes without suppressing them (the same
+  mechanism already documented here for an unrelated macOS collision),
+  the physical Control keydown reaches the focused game regardless of
+  which letter follows it, popping the Skill Info overlay over the exact
+  screen this tool is about to read. Confirmed live: a dry-run's capture
+  came back with the Skill Info panel visibly covering the results,
+  reading as a fully blank roll. Windows now defaults to Alt+M/Alt+N
+  instead (not bound to anything in that hint bar); macOS keeps
+  Control+M/Control+N, which is already proven collision-free there.
+  Verified end-to-end after the fix: a full multi-page roll (page 1 +
+  page 2 via a real Q keypress) read and decided correctly with no
+  interference.
+- Feature: edit an existing goal from the interactive menu (option 2),
+  not just build new ones with the wizard. Tweaking a required skill's
+  minimum level, adding/removing an allowed additional skill, editing
+  protected skills, adding/removing a whole profile, or renaming the
+  goal/augment type no longer requires hand-editing YAML -- reuses the
+  wizard's own skill-name resolution (typo correction included) and
+  validation. Verified end-to-end against a real user goal config
+  (`gila-minmax.yaml`, 4 profiles): edited a required skill's level,
+  saved, and reloaded the file to confirm the change round-tripped
+  correctly with the rest of the goal untouched.
+- Perf (Windows): OCR now runs through `tesserocr` (in-process) instead of
+  spawning a `tesseract` subprocess per call, when available -- **3.76x
+  faster**, measured against the real, already-threaded `ocr.read_page()`
+  production path (not a naive baseline), with byte-identical output on
+  every crop tested. Installs automatically via `requirements.txt` from a
+  prebuilt wheel (`simonflueckiger/tesserocr-windows_build`, MIT-licensed;
+  not on PyPI, so pinned to a specific direct URL, Windows + this
+  project's standard Python version only) and falls back to the existing
+  subprocess path cleanly if it's ever unavailable -- macOS is completely
+  unaffected. `--selfcheck` now reports whether the accelerator is
+  active. See `docs/ocr-performance-research.md` #1b for the full
+  measurement writeup, including a packaging gap
+  (`tesserocr.cysignals` needing an explicit PyInstaller hidden-import)
+  found and fixed by actually running the compiled build, not just the
+  source checkout.
+- Feature: `--package-failure` (also in the interactive menu, option 8)
+  bundles the most recent debug log (+ its matching `.log`/`.jsonl`) and
+  the most recent saved failure screenshots from `logs/` into one zip,
+  ready to attach to a bug report -- no more hunting through `logs/` by
+  hand to figure out which files are actually relevant. The two are found
+  independently (newest debug log, newest `unreadable_*` screenshot
+  cluster) rather than assumed to be from the same run, since the most
+  recent run might have succeeded while an earlier one failed.
+- Feature: confidence tagging in the debug log -- each row's entry now
+  records *how* its digit was actually read (`template`, a specific
+  `tesseract:psmN`, or last-resort `sparkle-recovery`) and whether a
+  merged run needed debridging first (`debridged:color` or
+  `debridged:brightness`), e.g. `Artillery +1 [template]` or `Diversion
+  +1 [tesseract:psm8, debridged:color]`. Previously only *what* a row
+  parsed as was recorded; several earlier fixes in this project started
+  from reasoning backward through screenshots to reconstruct what the
+  OCR pipeline must have done to produce a given misread -- this is
+  exactly the information that took. Found immediately useful on its own
+  first real test: the "clean" reference fixture used throughout this
+  project's test suite turns out to need color-debridging on one of its
+  two rows, previously invisible.
+
 ## [0.1.3-beta] -- 2026-08-23
 
 - Feature: the interactive menu's "start farming" option now prompts for

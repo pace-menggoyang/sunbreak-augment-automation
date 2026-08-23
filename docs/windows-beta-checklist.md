@@ -60,13 +60,17 @@ the full console output for both.
 
 ## 6. Hotkeys
 
-Confirm Ctrl+M starts and Ctrl+N force-stops as expected, and note
-whether either one visibly affected the game itself (shouldn't happen --
-see the "Known limitations" section of the README for why it might on
-Windows).
+Confirm Alt+M starts and Alt+N force-stops as expected, and note whether
+either one visibly affected the game itself. (Windows defaults to Alt,
+not Control, specifically because Control collided with Sunbreak's own
+"Skill Info" bind -- confirmed live, see `qurio_aug/hotkeys.py`. If Alt
+turns out to affect something too on your setup, that's exactly the kind
+of thing this check is for.)
 
 ## 7. Anything that crashed
 
 Paste the **full** traceback, not a summary or a screenshot of just the
 last line -- the actual error is almost always higher up. Include the
-exact command you ran.
+exact command you ran. Also run `qurio-aug.exe --package-failure` (menu
+option 8) and attach the zip it produces -- bundles the relevant debug
+log and any saved failure screenshots from `logs/` for you.

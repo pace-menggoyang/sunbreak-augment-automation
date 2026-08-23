@@ -71,6 +71,75 @@ wheel, `pip install` it in a throwaway Windows env (or CI), and confirm
 `tesserocr.tesseract_version()` and a real OCR call both work before
 committing to this path over #5 or #4a.
 
+### 1b. Update (real Windows hardware, this session): both gaps closed -- it works, and the win is real
+
+Both gaps from 1a resolved with actual Windows access, not desk research:
+
+**License**: the `simonflueckiger/tesserocr-windows_build` repo itself is
+MIT-licensed (confirmed on the repo page, not just inferred) -- the
+underlying bundled Tesseract (Apache 2.0) and Leptonica (a permissive
+BSD-style license) are both already fine to redistribute, same as the
+macOS vendoring already does. Resolves 1a's licensing gap for the
+wrapper/wheel itself; still worth a final check specifically on
+redistribution terms before actually vendoring into a shipped build (a
+license existing isn't automatically the same as every clause being
+satisfied), but nothing found here blocks moving forward.
+
+**It works.** `pip install`ed the `tesserocr-2.10.0-cp314-cp314-win_amd64.whl`
+release (bundling **tesseract 5.5.2**, matching 1a) straight from the
+GitHub release URL into this project's real `.venv` on real Windows
+hardware -- imports cleanly, `tesserocr.tesseract_version()` reports
+`tesseract 5.5.2`, and pointing it at the same `tessdata` directory the
+system Tesseract install already uses (`PyTessBaseAPI(path=...)`) picks up
+`eng`/`osd` correctly.
+
+**Correctness: byte-identical.** Ran all 6 real name/value crops from
+`tests/fixtures/three_rows_reference.png` (the exact crop/bbox/upscale
+preprocessing `read_row` produces) through both the current
+`pytesseract`-subprocess path and `tesserocr`, same `tessdata`, same PSM
+per call -- all 6 outputs matched exactly, including the `"Lv +l"` OCR
+noise artifact already documented elsewhere in this doc (confirms this
+isn't a cleaner/different result, just a faster path to the identical
+one). Also confirmed at the `ocr.read_page()` level: swapping the engine
+underneath it still parses the fixture as `['Artillery', 'Diversion',
+'Critical Boost']`, identical to today's shipped output.
+
+**Speed: 3.76x, measured against the real production code path, not a
+naive baseline.** This is the comparison that matters, and the one #4c's
+regression came from getting wrong: `ocr._run_tesseract` was swapped for a
+`tesserocr`-backed equivalent (thread-local `PyTessBaseAPI` instances,
+since a single instance isn't safe to call concurrently -- the existing
+4-worker row thread pool calls it from multiple threads at once), then
+`ocr.read_page()` itself -- real, unmodified, already-threaded production
+code -- was measured before and after the swap, 20 trials each:
+
+```
+current  ocr.read_page() (pytesseract subprocess, 4-worker pool): median 604.8ms
+swapped  ocr.read_page() (tesserocr in-process,    4-worker pool): median 161.0ms
+speedup: 3.76x
+```
+
+Unlike #4c's batching idea, this win doesn't evaporate once measured
+against the already-threaded baseline -- it's not competing with the
+thread pool for the same source of parallelism (subprocess spawn
+overlap), it's removing the subprocess entirely, so the two effects
+stack rather than cancel out.
+
+**Not yet validated**: only tested against one clean reference fixture
+(`three_rows_reference.png`) -- the messier real captures
+(`step-references/*.png`) that validated #4b's batching work aren't
+present on this machine (gitignored, and this is a fresh Windows
+checkout migrated from macOS mid-session). Worth a pass against those
+before fully trusting it, though there's no specific reason to expect
+sparkle/border-glow crops to behave differently -- the underlying
+Tesseract binary and tessdata are identical either way, only the
+subprocess-vs-in-process calling convention changed. Also not yet
+integrated into the shipped pipeline -- this was a `.venv`-local
+prototype (`pip install` from the GitHub release URL directly, not added
+to `requirements.txt`), not wired into `qurio_aug/ocr.py` or
+`packaging/vendor_tesseract_windows.ps1`. See `docs/roadmap.md` item 3
+for what integration would still need.
+
 ## 2. Sparkle-contamination-aware retrying
 
 **Started from**: the user's observation that sparkle-obscured digits
@@ -384,7 +453,7 @@ implementation is correct and battle-tested against real captures, but
 correctness was never the question -- speed was, and the honest, measured
 answer on the hardware available here is that it's a regression.
 
-## 5. Tessdata model variant (fast vs. best) -- checked, no action needed on macOS; Windows unverified
+## 5. Tessdata model variant (fast vs. best) -- checked, no action needed on either platform
 
 While isolating call overhead, checked which `eng.traineddata` variant is
 actually in use, since swapping "best" (accurate, slow float model) for
@@ -401,16 +470,14 @@ pulled on macOS -- no action there. Confirmed indirectly too: `--oem 0`
 present," which is exactly what a `tessdata_fast`-only (LSTM-only) file
 does.
 
-**Unverified**: the Windows path vendors from a Chocolatey install
-(`packaging/vendor_tesseract_windows.ps1`), which uses UB-Mannheim's
-tesseract build. Whether *that* ships `tessdata_fast` or the slower
-default/best variant hasn't been checked -- same "no way to verify
-without Windows test access" constraint noted elsewhere in this doc for
-`tesserocr`. If it turns out to be the slower variant, swapping in
-`tessdata_fast`'s `eng.traineddata` (same one already vendored on macOS)
-would be a same-order-of-magnitude win as tesserocr's, with none of its
-packaging risk -- worth a 5-minute check next time there's Windows access,
-before spending any effort on tesserocr's build-toolchain problem.
+**Update (real Windows hardware, this session): also already the fast
+variant.** Checked the same way: the Windows path vendors from a
+Chocolatey install (`packaging/vendor_tesseract_windows.ps1`, UB-Mannheim's
+tesseract build) -- its vendored `eng.traineddata` is 4.1MB (matching
+`tessdata_fast`'s known small size, vs. `best`'s much larger float model),
+and `--oem 0` against it fails with the identical "components are not
+present" error macOS's file produces. No swap needed on Windows either --
+both platforms were already pulling the fast variant this whole time.
 
 ## 6. Ruled out / checked with no meaningful win (this session)
 
@@ -455,26 +522,43 @@ doesn't re-derive them from scratch:
 
 ## Recommendation
 
-Priority order if/when this moves from research to implementation. #2 is
-shipped and #4a/#4b is a closed dead end -- both kept below with their
-outcomes rather than deleted, so neither gets re-investigated blind.
+Priority order if/when this moves from research to implementation. #1b and
+#2 are shipped and #4a/#4b is a closed dead end -- all three kept below
+with their outcomes rather than deleted, so none gets re-investigated
+blind.
 
-1. **#1a (`tesserocr` via the existing prebuilt Windows wheel)** -- now
-   the top open item, by default: `simonflueckiger/tesserocr-windows_build`
-   (the path `tesserocr`'s own README recommends for Windows) already
-   ships self-contained wheels bundling their own tesseract.dll, meaning
-   the CI-build-our-own-wheel spike originally scoped for #1 may not be
-   necessary at all. Still needs an actual Windows test (can't verify
-   from macOS) and a license check before vendoring a third-party
-   compiled binary, but the risk profile dropped from "build our own
-   toolchain, unproven" to "test whether an existing, upstream-endorsed
-   wheel works for us" -- and unlike #4a/#4b, its win (2.9-6.4x, skipping
-   subprocess spawning entirely) isn't dependent on how many CPU cores
-   are sitting idle, so it isn't at risk of the same core-count-dependent
-   reversal.
-2. **#5 (confirm Windows tessdata variant)** -- essentially free to check
-   (no code change, just inspect the vendored file) next time there's
-   Windows access; do this before investing in tesserocr's build path.
+1. **#1b (`tesserocr` via the existing prebuilt Windows wheel) --
+   shipped.** Both gaps #1a flagged closed (MIT-licensed; confirmed
+   working, byte-identical output on every real crop tested), then
+   integrated end-to-end: `requirements.txt` (a version- and
+   platform-marker-gated direct wheel URL, since it isn't on PyPI),
+   `_run_tesseract` now prefers a thread-local `tesserocr.PyTessBaseAPI`
+   per row-thread-pool worker (falling back to the pytesseract subprocess
+   path cleanly if tesserocr is unavailable or its tessdata can't be
+   resolved -- see `tesseract_setup.tesserocr_tessdata_dir`), and
+   `--selfcheck` now reports whether the accelerator is active. **3.76x
+   speedup measured against the real, already-threaded `ocr.read_page()`
+   production path**, not a naive/wrong baseline (unlike #4a/#4b). The
+   compiled build needed one packaging fix beyond source-level
+   integration: `tesserocr.cysignals` (a nested compiled submodule) isn't
+   traced by PyInstaller's static import analysis and has to be listed
+   explicitly in `packaging/qurio-aug.spec`'s `HIDDEN_IMPORTS` -- confirmed
+   live: omitting it silently produced a working exe whose accelerator was
+   inactive (`ModuleNotFoundError`), not a build failure, so this is easy
+   to miss without actually running the compiled output. No changes needed
+   to `packaging/vendor_tesseract_windows.ps1` -- tesserocr's own DLLs live
+   inside its package directory and get auto-bundled by PyInstaller, and
+   it reuses the tessdata already vendored there for the subprocess path.
+   Still not validated against messier real captures
+   (`step-references/*.png`, not present on the machine this was built
+   on) -- worth a pass if a live report ever suggests it behaves
+   differently from the subprocess path, though there's no specific
+   reason to expect that (same Tesseract binary and tessdata either way).
+2. **#5 (confirm Windows tessdata variant) -- checked, no action needed.**
+   The vendored Windows `eng.traineddata` is already `tessdata_fast`
+   (confirmed by file size + the same `--oem 0` failure signature used to
+   confirm macOS), same as macOS. Also now doubly moot with #1b shipped,
+   since tesserocr points at that same vendored tessdata too.
 3. **#3 (color + structure for value-text)** -- still promising and still
    builds on already-proven techniques (the same green-channel-dominance
    check #2's fix below uses, just applied to more of the value read
