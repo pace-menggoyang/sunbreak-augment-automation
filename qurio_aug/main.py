@@ -130,6 +130,20 @@ def _select_goal_path() -> str | None:
     return raw  # typed/pasted path, used as-is
 
 
+def _prompt_max_attempts(default: int) -> int:
+    """Only meaningful for a real farming run (choice 4) -- dry-run
+    (choice 3) ignores max_attempts entirely (see _execute), so it isn't
+    asked there.
+    """
+    raw = input(f"\nMax attempts before giving up (blank for default of {default}): ").strip()
+    if not raw:
+        return default
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    print(f"{raw!r} isn't a positive number -- using default of {default}.")
+    return default
+
+
 def _countdown(seconds: float) -> None:
     if seconds <= 0:
         return
@@ -187,6 +201,9 @@ def _interactive_menu() -> None:
                 continue
             if region_config is None:
                 region_config = ocr.load_region_config()
+            max_attempts = state_machine.MAX_ATTEMPTS_DEFAULT
+            if choice == "4":
+                max_attempts = _prompt_max_attempts(state_machine.MAX_ATTEMPTS_DEFAULT)
             common_kwargs = dict(
                 window_title_hint=None,
                 region_config=region_config,
@@ -195,7 +212,7 @@ def _interactive_menu() -> None:
                 settle_delay=state_machine.RESULT_SETTLE_DELAY,
             )
             _run_with_hotkeys(
-                goal, dry_run=(choice == "3"), max_attempts=state_machine.MAX_ATTEMPTS_DEFAULT,
+                goal, dry_run=(choice == "3"), max_attempts=max_attempts,
                 common_kwargs=common_kwargs,
                 start_hotkey=DEFAULT_START_HOTKEY, stop_hotkey=DEFAULT_STOP_HOTKEY,
             )

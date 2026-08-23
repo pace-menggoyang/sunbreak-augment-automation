@@ -127,6 +127,30 @@ def test_select_goal_path_searches_both_dirs(monkeypatch):
         assert main._select_goal_path() == str(d2 / "b.yaml")
 
 
+# --- _prompt_max_attempts: blank keeps the default, a positive number
+# overrides it, anything else falls back to the default with a warning. ---
+
+
+def test_prompt_max_attempts_blank_uses_default(monkeypatch):
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "")
+    assert main._prompt_max_attempts(300) == 300
+
+
+def test_prompt_max_attempts_positive_number_overrides_default(monkeypatch):
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "50")
+    assert main._prompt_max_attempts(300) == 50
+
+
+def test_prompt_max_attempts_zero_falls_back_to_default(monkeypatch):
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "0")
+    assert main._prompt_max_attempts(300) == 300
+
+
+def test_prompt_max_attempts_non_numeric_falls_back_to_default(monkeypatch):
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "abc")
+    assert main._prompt_max_attempts(300) == 300
+
+
 def run_all():
     class FakeMonkeypatch:
         def __init__(self):
