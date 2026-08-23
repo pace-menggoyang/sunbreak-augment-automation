@@ -37,10 +37,18 @@ DATAS = [
 
 # win32timezone is a common PyInstaller+pywin32 gap: pytz/pywin32's own
 # timezone glue imports it lazily in a way the dependency scanner doesn't
-# always catch. Harmless to list unconditionally, but only actually
-# resolvable when building on Windows (where pywin32 is installed), so
-# it's kept platform-gated rather than listed always.
-HIDDEN_IMPORTS = ["win32timezone"] if sys.platform == "win32" else []
+# always catch. tesserocr.cysignals is the same class of gap for the
+# tesserocr accelerator (see qurio_aug/ocr.py, docs/ocr-performance-
+# research.md #1b): PyInstaller's static analysis doesn't trace it as a
+# dependency even though it's a real nested compiled submodule tesserocr
+# needs at import time -- confirmed live: omitting it produced a working
+# build whose --selfcheck reported the accelerator silently inactive
+# ("No module named 'tesserocr.cysignals'"), not a build failure, so this
+# is easy to miss without actually running the compiled exe. Both are
+# harmless to list unconditionally, but only actually resolvable when
+# building on Windows (where pywin32/tesserocr are installed), so kept
+# platform-gated rather than listed always.
+HIDDEN_IMPORTS = ["win32timezone", "tesserocr.cysignals"] if sys.platform == "win32" else []
 
 
 def _analysis(script: str) -> Analysis:

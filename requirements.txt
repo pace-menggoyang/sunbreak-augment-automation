@@ -1,6 +1,13 @@
 openpyxl>=3.1
 pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
 pywin32>=306; sys_platform == "win32"
+# Optional Windows OCR accelerator (~3.76x measured, see
+# docs/ocr-performance-research.md #1b) -- not on PyPI, so this pins the
+# exact prebuilt wheel for the Python version this project's CI/packaging
+# standardizes on. The marker means it's simply skipped (not an install
+# failure) on any other Python version or platform; qurio_aug/ocr.py
+# already falls back to pytesseract cleanly if it's unavailable.
+tesserocr @ https://github.com/simonflueckiger/tesserocr-windows_build/releases/download/tesserocr-v2.10.0-tesseract-5.5.2/tesserocr-2.10.0-cp314-cp314-win_amd64.whl ; sys_platform == "win32" and python_version == "3.14"
 mss>=9.0
 pytesseract>=0.3
 rapidfuzz>=3.0

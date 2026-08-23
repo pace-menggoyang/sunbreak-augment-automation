@@ -338,29 +338,41 @@ def test_read_page_empty_rows_returns_empty_without_touching_the_image():
 # entire process instead of just failing that one OCR call. ---
 
 
+# These three test the pytesseract-subprocess fallback path specifically
+# -- forced by disabling _get_tesserocr_api (rather than relying on
+# platform/availability), so they exercise the same code regardless of
+# whether tesserocr happens to be installed on the machine running them.
+# See test_get_tesserocr_api_* below for the tesserocr path itself.
+
 def test_run_tesseract_treats_missing_temp_file_as_no_text_found():
     original = pytesseract.image_to_string
+    original_get_api = ocr._get_tesserocr_api
     pytesseract.image_to_string = lambda *a, **kw: (_ for _ in ()).throw(
         FileNotFoundError("simulated missing tesseract temp output file")
     )
+    ocr._get_tesserocr_api = lambda: None
     try:
         result = ocr._run_tesseract(Image.new("RGB", (10, 10)), "--psm 7")
     finally:
         pytesseract.image_to_string = original
+        ocr._get_tesserocr_api = original_get_api
     assert result == ""
 
 
 def test_run_tesseract_treats_tesseract_error_as_no_text_found():
     original = pytesseract.image_to_string
+    original_get_api = ocr._get_tesserocr_api
 
     def boom(*a, **kw):
         raise pytesseract.pytesseract.TesseractError(1, "simulated tesseract failure")
 
     pytesseract.image_to_string = boom
+    ocr._get_tesserocr_api = lambda: None
     try:
         result = ocr._run_tesseract(Image.new("RGB", (10, 10)), "--psm 7")
     finally:
         pytesseract.image_to_string = original
+        ocr._get_tesserocr_api = original_get_api
     assert result == ""
 
 
@@ -368,12 +380,40 @@ def test_run_tesseract_passes_through_real_text_normally():
     # Confirms the wrapper isn't swallowing legitimate results -- only
     # the two specific failure modes above.
     original = pytesseract.image_to_string
+    original_get_api = ocr._get_tesserocr_api
     pytesseract.image_to_string = lambda *a, **kw: "  Artillery  "
+    ocr._get_tesserocr_api = lambda: None
     try:
         result = ocr._run_tesseract(Image.new("RGB", (10, 10)), "--psm 7")
     finally:
         pytesseract.image_to_string = original
+        ocr._get_tesserocr_api = original_get_api
     assert result == "Artillery"
+
+
+# --- tesserocr integration: config-string parsing (pure logic, always
+# testable) and _get_tesserocr_api's fallback behavior when the module
+# isn't available -- the real tesserocr-backed OCR path itself is
+# exercised implicitly by every other test in this file that calls
+# _run_tesseract, whenever tesserocr happens to be installed. ---
+
+def test_parse_pytesseract_config_plain_psm():
+    assert ocr._parse_pytesseract_config("--psm 7") == (7, "")
+
+
+def test_parse_pytesseract_config_psm_with_whitelist():
+    assert ocr._parse_pytesseract_config(
+        "--psm 8 -c tessedit_char_whitelist=0123456789"
+    ) == (8, "0123456789")
+
+
+def test_get_tesserocr_api_returns_none_when_module_unavailable():
+    original = ocr.tesserocr
+    ocr.tesserocr = None
+    try:
+        assert ocr._get_tesserocr_api() is None
+    finally:
+        ocr.tesserocr = original
 
 
 def run_all():

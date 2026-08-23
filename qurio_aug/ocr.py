@@ -65,6 +65,8 @@ from __future__ import annotations
 
 import fnmatch
 import re
+import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
@@ -79,6 +81,25 @@ from rapidfuzz import fuzz
 from qurio_aug.decision import SkillResult
 from qurio_aug.paths import resource_dir
 from qurio_aug.skills_db import match_skill_name
+from qurio_aug.tesseract_setup import tesserocr_tessdata_dir
+
+# In-process OCR accelerator, Windows only (see
+# docs/ocr-performance-research.md #1b -- measured 3.76x faster than the
+# pytesseract subprocess path below, against this project's own real
+# production read_page()). Optional: requirements.txt installs it from a
+# pinned GitHub wheel (not on PyPI) only for sys_platform == "win32", so
+# this import is expected to fail everywhere else, and even on Windows if
+# someone's on a Python version that wheel doesn't cover -- either way,
+# _get_tesserocr_api() below falls back to the pytesseract path cleanly.
+_tesserocr_import_error: str | None = None
+if sys.platform == "win32":
+    try:
+        import tesserocr
+    except ImportError as e:
+        tesserocr = None
+        _tesserocr_import_error = repr(e)
+else:
+    tesserocr = None
 
 CONFIG_DIR = resource_dir("configs")
 DIGIT_TEMPLATE_DIR = resource_dir("data", "digit_templates")
@@ -308,24 +329,108 @@ def _column_runs(
     return runs
 
 
-def _run_tesseract(image: Image.Image, config: str) -> str:
-    """pytesseract.image_to_string, made resilient to a transient
-    infrastructure failure observed live after several hundred rapid
-    sequential OCR calls in one run: tesseract writes its result to a
-    temp file, and pytesseract's very next step reads it straight back --
-    if that file is already gone by then (observed:
-    FileNotFoundError on a '/var/folders/.../tess_XXXXXXXX.txt' pytesseract
-    itself had just asked tesseract to create, with no indication of what
-    removed it), that's not a content-recognition failure, it's
-    tesseract/pytesseract's own subprocess plumbing hiccuping -- likely
-    exposed by how much faster/more frequent these calls became once the
-    template-match fast path and shorter timings landed. Treating it the
-    same as "no text found" (empty string, the same thing a genuinely
-    blank crop already produces) lets it flow into the retry logic that
-    already handles a row that's transiently unparseable for any other
-    reason (state_machine._read_page_rows), instead of crashing the whole
-    run over what's very likely a one-off.
+_tesserocr_local = threading.local()
+_tesserocr_tessdata_dir: str | None = None
+_tesserocr_checked = False
+
+
+def _get_tesserocr_api():
+    """Returns a thread-local tesserocr.PyTessBaseAPI to OCR through, or
+    None if tesserocr should be skipped in favor of the pytesseract
+    subprocess path below (module unavailable, or its tessdata couldn't be
+    resolved -- see tesseract_setup.tesserocr_tessdata_dir).
+
+    Thread-local, not shared: a single PyTessBaseAPI instance isn't safe
+    to call concurrently, and read_page's row thread pool (see
+    _get_row_executor) calls _run_tesseract from multiple worker threads
+    at once -- one instance per worker thread instead. Cached per-thread
+    for the process's lifetime once constructed: building one loads
+    eng.traineddata (the same fixed cost pytesseract's subprocess path
+    pays on *every* call -- see this module's docstring lesson 6 -- but
+    here it's paid once per thread, not once per OCR call, which is most
+    of where the measured 3.76x speedup in
+    docs/ocr-performance-research.md #1b actually comes from).
+
+    Test seam: monkeypatch this function directly (not the module-level
+    `tesserocr` import) to force the pytesseract fallback path in a test
+    -- see tests/test_ocr.py's _run_tesseract tests.
     """
+    global _tesserocr_checked, _tesserocr_tessdata_dir
+    if tesserocr is None:
+        return None
+    api = getattr(_tesserocr_local, "api", None)
+    if api is not None:
+        return api
+    if not _tesserocr_checked:
+        _tesserocr_checked = True
+        _tesserocr_tessdata_dir = tesserocr_tessdata_dir()
+    if _tesserocr_tessdata_dir is None:
+        return None
+    try:
+        api = tesserocr.PyTessBaseAPI(path=_tesserocr_tessdata_dir)
+    except Exception:
+        return None
+    _tesserocr_local.api = api
+    return api
+
+
+def _parse_pytesseract_config(config: str) -> tuple[int, str]:
+    """This project's tesseract configs are always one of two shapes --
+    "--psm N" (name/value/results-title reads) or "--psm N -c
+    tessedit_char_whitelist=XXXX" (digit reads, see _DIGIT_WHITELIST) --
+    both written for pytesseract's CLI-flag-string config API. tesserocr's
+    API takes these as separate SetPageSegMode/SetVariable calls instead,
+    so this pulls the two pieces back out rather than maintaining two
+    parallel config representations everywhere _run_tesseract is called.
+    """
+    psm = int(config.split("--psm")[1].strip().split()[0])
+    whitelist = ""
+    if "tessedit_char_whitelist=" in config:
+        whitelist = config.split("tessedit_char_whitelist=")[1].split()[0]
+    return psm, whitelist
+
+
+def _run_tesseract(image: Image.Image, config: str) -> str:
+    """OCRs image per config (see _parse_pytesseract_config), preferring
+    the in-process tesserocr path (_get_tesserocr_api) when it's available
+    -- Windows only, ~3.76x faster, byte-identical output on every crop
+    tested so far, see docs/ocr-performance-research.md #1b -- and falling
+    back to the pytesseract subprocess path otherwise (macOS always; also
+    Windows if tesserocr isn't installed or its tessdata couldn't be
+    resolved). Any tesserocr failure (unexpected, but this is still a
+    third-party binding around a C++ API) is treated the same as "no text
+    found" -- the same resilience philosophy as the subprocess path below,
+    since a transient OCR-engine hiccup shouldn't crash a whole run either
+    way.
+
+    The subprocess path is made resilient to a transient infrastructure
+    failure observed live after several hundred rapid sequential OCR calls
+    in one run: tesseract writes its result to a temp file, and
+    pytesseract's very next step reads it straight back -- if that file is
+    already gone by then (observed: FileNotFoundError on a
+    '/var/folders/.../tess_XXXXXXXX.txt' pytesseract itself had just asked
+    tesseract to create, with no indication of what removed it), that's
+    not a content-recognition failure, it's tesseract/pytesseract's own
+    subprocess plumbing hiccuping -- likely exposed by how much
+    faster/more frequent these calls became once the template-match fast
+    path and shorter timings landed. Treating it the same as "no text
+    found" (empty string, the same thing a genuinely blank crop already
+    produces) lets it flow into the retry logic that already handles a
+    row that's transiently unparseable for any other reason
+    (state_machine._read_page_rows), instead of crashing the whole run
+    over what's very likely a one-off.
+    """
+    api = _get_tesserocr_api()
+    if api is not None:
+        try:
+            psm, whitelist = _parse_pytesseract_config(config)
+            api.SetPageSegMode(psm)
+            api.SetVariable("tessedit_char_whitelist", whitelist)
+            api.SetImage(image)
+            return api.GetUTF8Text().strip()
+        except Exception:
+            return ""
+
     try:
         return pytesseract.image_to_string(image, config=config).strip()
     except (OSError, pytesseract.pytesseract.TesseractError):
