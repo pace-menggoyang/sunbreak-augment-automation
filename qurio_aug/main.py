@@ -56,7 +56,7 @@ DEFAULT_START_DELAY = 3.0
 
 
 _MODIFIER_DISPLAY_NAMES = {
-    "alt": "Option",
+    "alt": "Alt" if sys.platform == "win32" else "Option",
     "cmd": "Command",
     "ctrl": "Control",
     "shift": "Shift",
@@ -225,6 +225,15 @@ def _interactive_menu() -> None:
 
 
 def main() -> None:
+    if sys.platform == "win32":
+        # The console's legacy codepage (cp1252 etc.) can't encode a lot of
+        # real-world window titles (styled Discord servers, VS Code's "..."
+        # truncation) -- crashed --list-windows outright on first real
+        # Windows testing. Printing "?" for what the console couldn't show
+        # anyway beats crashing the one diagnostic tool meant to help
+        # someone find the right --window value.
+        sys.stdout.reconfigure(errors="replace")
+        sys.stderr.reconfigure(errors="replace")
     if len(sys.argv) == 1:
         configure_tesseract()
         try:

@@ -32,6 +32,7 @@ from __future__ import annotations
 import ctypes
 
 import mss
+import win32api
 import win32gui
 import win32process
 from PIL import Image
@@ -82,7 +83,7 @@ def _owner_name(hwnd: int) -> str:
     """
     try:
         _, pid = win32process.GetWindowThreadProcessId(hwnd)
-        handle = win32process.OpenProcess(0x0400 | 0x0010, False, pid)  # QUERY_INFORMATION | VM_READ
+        handle = win32api.OpenProcess(0x0400 | 0x0010, False, pid)  # QUERY_INFORMATION | VM_READ
         try:
             return win32process.GetModuleFileNameEx(handle, 0).rsplit("\\", 1)[-1]
         finally:

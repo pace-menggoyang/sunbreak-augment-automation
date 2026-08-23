@@ -30,6 +30,11 @@ LOG_DIR = Path("logs")
 
 
 def main() -> None:
+    if sys.platform == "win32":
+        # See main.py's main() for why: the console's legacy codepage can't
+        # encode a lot of real-world window titles, and this prints them too.
+        sys.stdout.reconfigure(errors="replace")
+        sys.stderr.reconfigure(errors="replace")
     configure_tesseract()
     title_hint = sys.argv[1] if len(sys.argv) > 1 else None
     region_config = ocr.load_region_config()
