@@ -69,6 +69,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Callable
 
 import pytesseract
 import yaml
@@ -159,12 +160,16 @@ def _binarize(img: Image.Image, threshold: int = BRIGHT_THRESHOLD) -> Image.Imag
     return img.convert("L").point(lambda p: 255 if p > threshold else 0)
 
 
-def _template_match_digit(digit_crop: Image.Image) -> str | None:
+def _template_match_digit(digit_crop: Image.Image, min_score: float = DIGIT_TEMPLATE_MATCH_THRESHOLD) -> str | None:
     """Compare digit_crop against each known digit template (resized to
     the template's size, both binarized so color/font-weight don't
-    matter) and return the best match if it clears
-    DIGIT_TEMPLATE_MATCH_THRESHOLD, else None to signal "no confident
-    template match, use the tesseract fallback".
+    matter) and return the best match if it clears min_score, else None
+    to signal "no confident template match, use the tesseract fallback".
+
+    min_score defaults to DIGIT_TEMPLATE_MATCH_THRESHOLD; a lower value is
+    passed by _recover_sparkle_contaminated_digit specifically, since a
+    crop that needed sparkle recovery is inherently a bit noisier at the
+    edges than a clean one -- see SPARKLE_RECOVERY_MATCH_THRESHOLD.
     """
     templates = _load_digit_templates()
     if not templates:
@@ -183,7 +188,7 @@ def _template_match_digit(digit_crop: Image.Image) -> str | None:
         if score > best_score:
             best_score, best_digit = score, digit
 
-    return best_digit if best_score >= DIGIT_TEMPLATE_MATCH_THRESHOLD else None
+    return best_digit if best_score >= min_score else None
 
 
 # ---------------------------------------------------------------------------
@@ -271,17 +276,28 @@ def _pad_bbox(bbox: tuple[int, int, int, int], img: Image.Image, pad: int = BBOX
     return (max(0, x0 - pad), max(0, y0 - pad), min(img.width, x1 + pad), min(img.height, y1 + pad))
 
 
-def _column_runs(img: Image.Image, bbox: tuple[int, int, int, int], threshold: int = BRIGHT_THRESHOLD) -> list[tuple[int, int]]:
-    """x-ranges of contiguous columns with bright pixels within bbox --
+def _column_runs(
+    img: Image.Image,
+    bbox: tuple[int, int, int, int],
+    threshold: int = BRIGHT_THRESHOLD,
+    pixel_ok: Callable[[int, int, int], bool] | None = None,
+) -> list[tuple[int, int]]:
+    """x-ranges of contiguous columns with "content" pixels within bbox --
     splits a text bbox into character/word clusters (e.g. "Lv", "+", "1").
+
+    Content is plain brightness (any channel above threshold) by default.
+    Pass pixel_ok to test color instead -- see _attempt_color_debridge,
+    which needs to tell a green digit stroke apart from an equally-bright
+    sparkle, something no brightness threshold can do.
     """
     rgb = img.convert("RGB")
     px = rgb.load()
     x0, y0, x1, y1 = bbox
+    test = pixel_ok if pixel_ok is not None else (lambda r, g, b: max(r, g, b) > threshold)
     runs: list[tuple[int, int]] = []
     cur_start = None
     for x in range(x0, x1):
-        has = any(max(px[x, y]) > threshold for y in range(y0, y1))
+        has = any(test(*px[x, y]) for y in range(y0, y1))
         if has and cur_start is None:
             cur_start = x
         if not has and cur_start is not None:
@@ -353,6 +369,63 @@ def _ocr_content(img: Image.Image, config: str, upscale: int = UPSCALE) -> tuple
     return text, bbox
 
 
+# Below DIGIT_TEMPLATE_MATCH_THRESHOLD (0.85), used only by
+# _recover_sparkle_contaminated_digit's last-resort attempt -- a crop that
+# needed sparkle-pixel suppression and re-tightening is inherently noisier
+# at the edges than a clean one, and demanding the normal bar would defeat
+# the point (every real case measured scored comfortably below it despite
+# being visibly, correctly recovered). Measured directly against 4 real
+# community-submitted sparkle-contamination failures: the correct digit's
+# score landed 0.81-0.94, the wrong digit's topped out at 0.74-0.80 --
+# a consistent, comfortable gap clear of both this threshold and each
+# other, not a coin flip.
+SPARKLE_RECOVERY_MATCH_THRESHOLD = 0.75
+
+
+def _recover_sparkle_contaminated_digit(img: Image.Image) -> str:
+    """Last-resort recovery for a digit crop that's already the right
+    width (MAX_DIGIT_RUN_WIDTH wasn't exceeded, so select_digit_run/
+    _attempt_color_debridge never triggered) but still unreadable because
+    a sparkle sits *inside* it, not beside it.
+
+    Confirmed live: 4 separate real "Lv +1" gain failures where the
+    sparkle overlapped the digit itself rather than bridging it to the
+    sign, all still within MAX_DIGIT_RUN_WIDTH, all failing every existing
+    recognition attempt -- not because the digit wasn't there, but because
+    the sparkle's extra bright pixels distort the crop's effective
+    bounding box, which _template_match_digit's resize-to-template-size
+    step is sensitive to.
+
+    Paints out any pixel that's bright but not a green digit stroke (see
+    _is_green_digit_pixel) and re-tightens the crop to whatever's left,
+    then tries a template match at a deliberately lower confidence bar
+    (see SPARKLE_RECOVERY_MATCH_THRESHOLD) -- tesseract is deliberately
+    not retried here, unlike _ocr_single_digit's normal fallback: it has
+    no confidence gate at all, and this is already a second-chance path
+    on an already-processed image, one guess too many to risk on real
+    community capture data alone. Scoped to green (a gain) since that's
+    the only case with real samples to design against, same reasoning as
+    _attempt_color_debridge; a red/orange digit falls through to "",
+    unchanged from before this function existed.
+    """
+    rgb = img.convert("RGB")
+    px = rgb.load()
+    w, h = rgb.size
+    cleaned = rgb.copy()
+    cleaned_px = cleaned.load()
+    for y in range(h):
+        for x in range(w):
+            r, g, b = px[x, y]
+            if max(r, g, b) > BRIGHT_THRESHOLD and not _is_green_digit_pixel(r, g, b):
+                cleaned_px[x, y] = (0, 0, 0)
+
+    bbox = _bright_bbox(cleaned)
+    if bbox is None:  # every bright pixel was sparkle -- nothing to recover
+        return ""
+    retightened = cleaned.crop(_pad_bbox(bbox, cleaned, pad=2))
+    return _template_match_digit(retightened, min_score=SPARKLE_RECOVERY_MATCH_THRESHOLD) or ""
+
+
 def _ocr_single_digit(img: Image.Image) -> str:
     """Read a tight crop expected to contain exactly one digit.
 
@@ -386,7 +459,7 @@ def _ocr_single_digit(img: Image.Image) -> str:
         candidate = _run_tesseract(upscaled, config=f"--psm {psm} {_DIGIT_WHITELIST}")
         if len(candidate) == 1 and candidate.isdigit():
             return candidate
-    return ""
+    return _recover_sparkle_contaminated_digit(img)
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +524,23 @@ def select_digit_run(
     return cluster[-1]
 
 
+def _narrow_from_sub_runs(
+    sub_runs: list[tuple[int, int]], digit_run: tuple[int, int]
+) -> tuple[int, int] | None:
+    """Shared by both debridge strategies below: given runs found within
+    digit_run's own span, the last one is taken as the digit itself (the
+    sign, if separated out, always comes first) -- with _DEBRIDGE_CUT_BUFFER
+    of slack so the cut doesn't shave into the digit's own leftmost stroke.
+    None if there's nothing to split (still just one run) or the result is
+    still too wide to trust.
+    """
+    if len(sub_runs) < 2:
+        return None
+    cut_x = max(digit_run[0], sub_runs[-1][0] - _DEBRIDGE_CUT_BUFFER)
+    candidate = (cut_x, digit_run[1])
+    return candidate if candidate[1] - candidate[0] <= MAX_DIGIT_RUN_WIDTH else None
+
+
 def _attempt_debridge(
     value_crop: Image.Image, digit_run: tuple[int, int], value_bbox: tuple[int, int, int, int]
 ) -> tuple[int, int] | None:
@@ -472,13 +562,61 @@ def _attempt_debridge(
     for threshold in _DEBRIDGE_THRESHOLDS:
         sub_bbox = (digit_run[0], value_bbox[1], digit_run[1], value_bbox[3])
         sub_runs = _column_runs(value_crop, sub_bbox, threshold=threshold)
-        if len(sub_runs) < 2:
-            continue
-        cut_x = max(digit_run[0], sub_runs[-1][0] - _DEBRIDGE_CUT_BUFFER)
-        candidate = (cut_x, digit_run[1])
-        if candidate[1] - candidate[0] <= MAX_DIGIT_RUN_WIDTH:
+        candidate = _narrow_from_sub_runs(sub_runs, digit_run)
+        if candidate is not None:
             return candidate
     return None
+
+
+# A pixel counts as a green digit stroke only if G clearly outweighs both
+# R and B -- measured directly across 5 real community-submitted captures
+# of this exact failure (a "Lv +1" gain never resolving across all 8
+# retries): every green stroke pixel sampled had G 100-240 with R and B
+# both ~0, while every sparkle pixel sampled (the pink/white glint
+# causing the failure) had R comparable to or above G, e.g. (100,60,80),
+# (140,140,140) near-white edges -- a clean, wide gap, margin chosen well
+# clear of it on both sides.
+_GREEN_DOMINANCE_MARGIN = 30
+
+
+def _is_green_digit_pixel(r: int, g: int, b: int) -> bool:
+    return g > r + _GREEN_DOMINANCE_MARGIN and g > b + _GREEN_DOMINANCE_MARGIN
+
+
+def _attempt_color_debridge(
+    value_crop: Image.Image, digit_run: tuple[int, int], value_bbox: tuple[int, int, int, int]
+) -> tuple[int, int] | None:
+    """Second-line recovery, tried only after _attempt_debridge (brightness
+    thresholds) has already failed to split digit_run.
+
+    _attempt_debridge exploits the sparkle usually being *dimmer* than the
+    digit stroke. That assumption doesn't hold for a live bug reported by
+    the community: a persistent, bright pink/white sparkle sitting on a
+    "Lv +1" gain that never cleared across 8 retries, in 5 separate real
+    captures. Since _column_runs' brightness test is `max(r, g, b) >
+    threshold`, a sparkle pixel this bright registers as "content" at
+    every threshold in _DEBRIDGE_THRESHOLDS, same as the digit itself --
+    no brightness cutoff can ever separate them.
+
+    What does separate them is color, not brightness -- see
+    _is_green_digit_pixel. Scoped to green (a gain) specifically, since
+    that's the only case with real sparkle-contamination samples to
+    design against: a red (loss) or orange (maxed-out gain) digit falls
+    through to still-unparseable exactly as it did before this function
+    existed, rather than guessing at an untested color rule for them.
+    """
+    sub_bbox = (digit_run[0], value_bbox[1], digit_run[1], value_bbox[3])
+    sub_runs = _column_runs(value_crop, sub_bbox, pixel_ok=_is_green_digit_pixel)
+    if len(sub_runs) < 2:
+        return None
+    # Unlike _attempt_debridge, don't reuse digit_run's own right edge here:
+    # that edge came from a *brightness* bbox, which is exactly what a
+    # bright sparkle can extend past the real glyph's true right edge
+    # (confirmed live: a real digit_run of (60, 93) had its actual green
+    # content end at column 81 -- columns 81-93 were sparkle, not glyph).
+    # The last green sub-run's own bounds are the trustworthy ones here.
+    candidate = sub_runs[-1]
+    return candidate if candidate[1] - candidate[0] <= MAX_DIGIT_RUN_WIDTH else None
 
 
 def read_row(screenshot: Image.Image, row: RowRegions) -> RawRow:
@@ -495,7 +633,22 @@ def read_row(screenshot: Image.Image, row: RowRegions) -> RawRow:
         if digit_run is not None:
             run_width = digit_run[1] - digit_run[0]
             if run_width > MAX_DIGIT_RUN_WIDTH:
-                recovered = _attempt_debridge(value_crop, digit_run, value_bbox)
+                # Color first: when it applies (a green digit bridged to
+                # its sign by a sparkle), it's demonstrably at least as
+                # accurate as the brightness approach and sometimes
+                # clearly more so -- confirmed directly against this
+                # project's own "heavily contaminated" fixture, where
+                # brightness recovers a crop that's mostly sparkle with
+                # only a sliver of the real green digit, while color
+                # recovers a clean, fully-legible digit (both happen to
+                # still OCR correctly today, but only one of them isn't
+                # relying on luck). Returns None immediately for anything
+                # it doesn't apply to (not green, or no clean split),
+                # falling through to brightness exactly as before --
+                # zero change for every case that isn't this one.
+                recovered = _attempt_color_debridge(value_crop, digit_run, value_bbox)
+                if recovered is None:
+                    recovered = _attempt_debridge(value_crop, digit_run, value_bbox)
                 if recovered is not None:
                     digit_run = recovered
                     run_width = digit_run[1] - digit_run[0]

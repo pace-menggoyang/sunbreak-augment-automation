@@ -164,6 +164,80 @@ def test_debridged_digit_reads_correctly_end_to_end():
     assert digit_text == "1"
 
 
+# --- Community-reported bug: a "Lv +1" gain never resolving across all 8
+# retries, in every case a bright pink/white sparkle overlapping the
+# digit rather than a dim one _attempt_debridge's brightness thresholds
+# can see past. Fixtures are real value-cell crops from 2 of the 5
+# community-submitted failure captures that motivated this fix.
+
+def test_color_debridge_fixes_a_wrong_cut_brightness_debridge_makes():
+    # This fixture is a real case where _attempt_debridge (brightness)
+    # returns a *non-None* but wrong, too-narrow slice -- (88, 93), which
+    # OCRs as "4" -- because it reuses digit_run's own right edge (93),
+    # not realizing that edge came from the sparkle, not the glyph. The
+    # real "1" is at columns 73-81. _attempt_color_debridge doesn't make
+    # this mistake since it trusts the green-only run's own bounds.
+    img = Image.open(FIXTURES / "value_crop_bridged_sparkle_color_recoverable.png")
+    bbox = ocr._bright_bbox(img)
+    runs = ocr._column_runs(img, bbox)
+    digit_run = select_digit_run(runs, img.width)
+    assert digit_run[1] - digit_run[0] > ocr.MAX_DIGIT_RUN_WIDTH  # confirms contamination
+
+    wrong = ocr._attempt_debridge(img, digit_run, bbox)
+    assert wrong is not None and wrong[1] - wrong[0] <= ocr.MAX_DIGIT_RUN_WIDTH  # "succeeds" but wrongly
+
+    recovered = ocr._attempt_color_debridge(img, digit_run, bbox)
+    assert recovered is not None
+    assert recovered[1] - recovered[0] <= ocr.MAX_DIGIT_RUN_WIDTH
+    assert recovered != wrong
+
+
+def test_read_row_recovers_bridged_sparkle_via_color_debridge():
+    row = ocr.RowRegions(name_box=(0, 0, 1, 1), value_box=(0, 0, 1, 1))
+    img = Image.open(FIXTURES / "value_crop_bridged_sparkle_color_recoverable.png")
+    raw = ocr.read_row(img, row)
+    assert raw.digit_text == "1"
+
+
+def test_recover_sparkle_contaminated_digit_cleans_a_narrow_already_correct_run():
+    # Here digit_run is already within MAX_DIGIT_RUN_WIDTH (the sparkle
+    # sits *on* the digit, not bridging it to the sign) -- neither
+    # debridge function ever triggers. Confirmed live: 4 separate real
+    # community failures had exactly this shape, all failing every
+    # existing recognition attempt on the untouched crop.
+    img = Image.open(FIXTURES / "value_crop_sparkle_on_digit_recoverable.png")
+    bbox = ocr._bright_bbox(img)
+    runs = ocr._column_runs(img, bbox)
+    digit_run = select_digit_run(runs, img.width)
+    assert digit_run[1] - digit_run[0] <= ocr.MAX_DIGIT_RUN_WIDTH  # not oversized -- debridge never fires
+
+    x0 = max(0, digit_run[0] - ocr.DIGIT_CROP_PADDING)
+    x1 = min(img.width, digit_run[1] + ocr.DIGIT_CROP_PADDING)
+    y0 = max(0, bbox[1] - ocr.DIGIT_CROP_PADDING)
+    y1 = min(img.height, bbox[3] + ocr.DIGIT_CROP_PADDING)
+    digit_crop = img.crop((x0, y0, x1, y1))
+
+    assert ocr._recover_sparkle_contaminated_digit(digit_crop) == "1"
+
+
+def test_read_row_recovers_sparkle_on_digit_end_to_end():
+    row = ocr.RowRegions(name_box=(0, 0, 1, 1), value_box=(0, 0, 1, 1))
+    img = Image.open(FIXTURES / "value_crop_sparkle_on_digit_recoverable.png")
+    raw = ocr.read_row(img, row)
+    assert raw.digit_text == "1"
+
+
+def test_is_green_digit_pixel_separates_green_stroke_from_sparkle():
+    # Measured directly from the fixtures above: real green digit stroke
+    # pixels ranged (0, 100-240, 0); real sparkle pixels measured
+    # included (100, 60, 80) and a near-white anti-aliased edge (140,
+    # 140, 140) -- both should read as "not a green digit pixel".
+    assert ocr._is_green_digit_pixel(0, 200, 0)
+    assert ocr._is_green_digit_pixel(0, 101, 2)
+    assert not ocr._is_green_digit_pixel(100, 60, 80)
+    assert not ocr._is_green_digit_pixel(140, 140, 140)
+
+
 # --- indicator_region_ambiguous: distinguishes a genuine (if
 # glow-corrupted) page indicator from a genuinely single-page roll, whose
 # indicator box can still pick up a narrow sliver of an adjacent row's
