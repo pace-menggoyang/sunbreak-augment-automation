@@ -346,6 +346,76 @@ def test_command_reader_falls_back_to_input_when_prompt_toolkit_fails(monkeypatc
     assert read("qurio-aug> ") == "typed-command"
 
 
+# --- _classify_status_line / _status_fragments / _MENU_ITEMS: the
+# arrow-key menu's colored status panel and command list. ---
+
+
+def test_classify_status_line_tesseract_failed_is_bad():
+    assert main._classify_status_line("tesseract: FAILED -- not installed") == "bad"
+
+
+def test_classify_status_line_tesseract_ok_is_good():
+    assert main._classify_status_line("tesseract: OK (version 5.4.0)") == "good"
+
+
+def test_classify_status_line_tesserocr_inactive_is_warn():
+    assert main._classify_status_line("tesserocr accelerator: inactive (not installed)") == "warn"
+
+
+def test_classify_status_line_window_not_found_is_warn_not_bad():
+    # Common/expected (e.g. the game just isn't open yet), not an error
+    # -- must not read as alarming as a real tesseract failure.
+    assert main._classify_status_line("window: not found (looking for 'X')") == "warn"
+
+
+def test_classify_status_line_window_found_is_good():
+    assert main._classify_status_line("window: found (owner='X' title='Y')") == "good"
+
+
+def test_classify_status_line_ambiguous_window_is_warn():
+    assert main._classify_status_line("window: 3 windows match 'X' -- ambiguous") == "warn"
+
+
+def test_classify_status_line_goal_is_neutral():
+    assert main._classify_status_line("goal: none selected yet") == "neutral"
+    assert main._classify_status_line("goal: configs/goals/example.yaml") == "neutral"
+
+
+def test_status_fragments_match_status_summary_lines():
+    session = main._SessionState(region_config=_DUMMY_REGION_CONFIG)
+    fragments = main._status_fragments(session)
+    summary = main._status_summary(session)
+    assert len(fragments) == len(summary)
+    for (style_class, text), line in zip(fragments, summary):
+        assert text == line + "\n"
+        assert style_class.startswith("class:status-")
+
+
+def test_menu_items_ids_are_all_dispatchable_via_commands_table():
+    # Every arrow-menu item's id must be a name _interactive_menu's
+    # dispatch (keyed off the same strings as _COMMANDS) already
+    # recognizes -- guards against the two lists drifting apart.
+    all_command_names = {name for names, _ in main._COMMANDS for name in names}
+    for cmd_id, _ in main._MENU_ITEMS:
+        assert cmd_id in all_command_names, f"{cmd_id!r} not found in _COMMANDS"
+
+
+# --- _show_arrow_menu: falls back (available=False) instead of crashing
+# when prompt_toolkit can't get a real console -- same failure mode
+# confirmed live for _make_command_reader's PromptSession. ---
+
+
+def test_show_arrow_menu_falls_back_when_construction_fails(monkeypatch):
+    def boom(**kw):
+        raise Exception("simulated: no console")
+
+    monkeypatch.setattr(main, "Application", boom)
+    session = main._SessionState(region_config=_DUMMY_REGION_CONFIG)
+    available, selected = main._show_arrow_menu(session)
+    assert available is False
+    assert selected is None
+
+
 def run_all():
     class FakeMonkeypatch:
         def __init__(self):

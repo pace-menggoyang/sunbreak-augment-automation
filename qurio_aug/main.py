@@ -37,9 +37,15 @@ from pathlib import Path
 from typing import Callable
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.application import Application
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import Layout, Window
+from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.styles import Style
+from prompt_toolkit.widgets import Frame
 
 from qurio_aug import calibrate, capture, ocr, state_machine
 from qurio_aug.goal_config import GoalValidationError, load_goal
@@ -280,22 +286,49 @@ def _run_with_window_recovery(action: Callable[[], None], session: _SessionState
                 return
 
 
-def _print_status(session: _SessionState) -> None:
+def _status_summary(session: _SessionState) -> list[str]:
+    """Human-readable tesseract/window/goal status lines -- shared by the
+    plain-text `status` command (_print_status) and the arrow-key menu's
+    colored status panel (_status_fragments), so there's one place that
+    computes it.
+    """
     lines, _ = _tesseract_status_lines()
-    for line in lines:
-        print(line)
-
     hint = _resolve_window_hint(session)
     matches = capture.find_windows(hint)
     if len(matches) == 1:
         w = matches[0]
-        print(f"window: found (owner={w.owner_name!r} title={w.title!r})")
+        lines.append(f"window: found (owner={w.owner_name!r} title={w.title!r})")
     elif len(matches) > 1:
-        print(f"window: {len(matches)} windows match {hint!r} -- ambiguous, will prompt when needed")
+        lines.append(f"window: {len(matches)} windows match {hint!r} -- ambiguous, will prompt when needed")
     else:
-        print(f"window: not found (looking for {hint!r} -- use 'window <hint>' to override)")
+        lines.append(f"window: not found (looking for {hint!r} -- use 'window <hint>' to override)")
+    lines.append(f"goal: {session.last_goal_path or 'none selected yet'}")
+    return lines
 
-    print(f"goal: {session.last_goal_path or 'none selected yet'}")
+
+def _classify_status_line(line: str) -> str:
+    """"good"/"warn"/"bad"/"neutral" for coloring the arrow-key menu's
+    status panel -- based on the line's own text, since _status_summary
+    already produces human-readable status strings and re-deriving
+    structured state here would just duplicate what they already say.
+    """
+    if line.startswith("goal:"):
+        return "neutral"
+    lowered = line.lower()
+    if lowered.startswith("tesseract:") and "failed" in lowered:
+        return "bad"  # a real blocking problem, not just "not set up yet"
+    if "inactive" in lowered or "ambiguous" in lowered or "not found" in lowered:
+        return "warn"  # expected/common (e.g. game not open yet), not an error
+    return "good"
+
+
+def _status_fragments(session: _SessionState) -> list[tuple[str, str]]:
+    return [(f"class:status-{_classify_status_line(line)}", line + "\n") for line in _status_summary(session)]
+
+
+def _print_status(session: _SessionState) -> None:
+    for line in _status_summary(session):
+        print(line)
 
 
 _COMMANDS: list[tuple[tuple[str, ...], str]] = [
@@ -345,6 +378,114 @@ def _print_help() -> None:
         print(f"  {primary:<28s} {desc}")
 
 
+# Command id -> menu label, in display order. A dedicated list rather than
+# derived from _COMMANDS (which carries numbered aliases and a couple of
+# entries -- "status", "help" -- that don't make sense as their own row
+# once the menu always shows status and the whole command list up front)
+# since the two are rendered in genuinely different contexts.
+_MENU_ITEMS: list[tuple[str, str]] = [
+    ("wizard", "Build a new goal config (wizard)"),
+    ("edit", "Edit an existing goal"),
+    ("calibrate", "Calibrate against your window"),
+    ("dry-run", "Test a goal against the current screen (safe, won't accept/reject/reroll)"),
+    ("farm", "Start farming with a goal"),
+    ("selfcheck", "Run diagnostics"),
+    ("windows", "List visible windows"),
+    ("package-failure", "Package up my last failure (for a bug report)"),
+    ("window", "Set/override the window title/owner hint for this session"),
+    ("exit", "Exit"),
+]
+
+_MENU_STYLE = Style.from_dict({
+    "frame.border": "#00d7d7",
+    "frame.label": "bold #00d7d7",
+    "status-good": "#00d787",
+    "status-warn": "#ffaf00",
+    "status-bad": "#ff5f5f",
+    "status-neutral": "#8a8a8a",
+    "item": "#d0d0d0",
+    "item-number": "#5f8787",
+    "selected": "bg:#00d7d7 #000000 bold",
+    "help": "#5f5f5f italic",
+})
+
+
+def _build_arrow_menu_app(session: _SessionState) -> Application[str | None]:
+    """A full-screen arrow-key/number-key menu (Up/Down or a digit to
+    move, Enter to run immediately -- no separate "Ok" button to tab to,
+    unlike prompt_toolkit's own radiolist_dialog) showing live
+    tesseract/window/goal status above the command list, so both are
+    visible without needing to type 'status'/'help' first. Rebuilt fresh
+    every loop iteration (see _interactive_menu) so status reflects
+    whatever changed since the last command.
+    """
+    selected = [0]
+    status = _status_fragments(session)
+
+    def get_text():
+        fragments = list(status)
+        fragments.append(("", "\n"))
+        for i, (_, label) in enumerate(_MENU_ITEMS):
+            number = f"{i + 1}. " if i < 9 else "   "
+            if i == selected[0]:
+                fragments.append(("class:selected", f" > {number}{label} \n"))
+            else:
+                fragments.append(("class:item-number", f"   {number}"))
+                fragments.append(("class:item", f"{label}\n"))
+        fragments.append(("class:help", "\nUp/Down or a number to move, Enter to run, Esc/Ctrl-C to exit.\n"))
+        return fragments
+
+    kb = KeyBindings()
+
+    @kb.add("up")
+    def _move_up(event) -> None:
+        selected[0] = (selected[0] - 1) % len(_MENU_ITEMS)
+
+    @kb.add("down")
+    def _move_down(event) -> None:
+        selected[0] = (selected[0] + 1) % len(_MENU_ITEMS)
+
+    @kb.add("enter")
+    def _confirm(event) -> None:
+        event.app.exit(result=_MENU_ITEMS[selected[0]][0])
+
+    @kb.add("c-c")
+    @kb.add("escape")
+    def _cancel(event) -> None:
+        event.app.exit(result=None)
+
+    for i in range(min(len(_MENU_ITEMS), 9)):
+        @kb.add(str(i + 1))
+        def _jump(event, i=i) -> None:
+            event.app.exit(result=_MENU_ITEMS[i][0])
+
+    body = Frame(Window(FormattedTextControl(get_text)), title="Qurio Augmentation Automation")
+    return Application(
+        layout=Layout(body),
+        key_bindings=kb,
+        style=_MENU_STYLE,
+        full_screen=True,
+        mouse_support=True,
+    )
+
+
+def _show_arrow_menu(session: _SessionState) -> tuple[bool, str | None]:
+    """Returns (available, selected_id). available=False means the
+    full-screen UI couldn't even be shown (no real console -- confirmed
+    live: this fails the same way _make_command_reader's PromptSession
+    does when stdout is redirected/piped), so the caller should fall
+    back to the typed-command REPL for the rest of the session.
+    selected_id is None when available=True but the user cancelled
+    (Esc/Ctrl-C), which exits the whole program.
+    """
+    try:
+        app = _build_arrow_menu_app(session)
+        result = app.run()
+    except Exception:
+        return False, None
+    return True, result
+
+
 def _interactive_menu() -> None:
     """Zero-arguments fallback -- this is what runs if you double-click
     the compiled exe (which passes no arguments) instead of it just
@@ -353,10 +494,16 @@ def _interactive_menu() -> None:
     defaults and walks through the same options with prompts instead of
     needing to know the flags up front.
 
-    A named-command REPL (prompt_toolkit: tab-completion + persistent
-    history) rather than a numbered list reprinted every loop -- but the
-    original numbers still work as aliases so existing muscle memory
-    isn't broken. calibrate/dry-run/farm all route through
+    Primary interface is a full-screen arrow-key/number-key menu
+    (_show_arrow_menu) showing live tesseract/window/goal status above
+    the always-visible command list -- no need to type 'help'/'status'
+    first. Falls back to a named-command REPL (prompt_toolkit:
+    tab-completion + persistent history; old numbers still work as
+    aliases) if the arrow-key menu can't get a real console either
+    (confirmed live: same failure mode as _make_command_reader's
+    PromptSession) -- checked once at startup and once more per loop in
+    case the very first attempt fails, then stays in whichever mode
+    worked. calibrate/dry-run/farm all route through
     _run_with_window_recovery so a WindowNotFoundError/AmbiguousWindowError
     (previously an uncaught crash -- see the CHANGELOG) offers an
     interactive pick instead.
@@ -364,26 +511,45 @@ def _interactive_menu() -> None:
     session = _SessionState(region_config=ocr.load_region_config())
     Path("logs").mkdir(exist_ok=True)
     read_command = _make_command_reader(_build_completer(), Path("logs") / ".repl_history")
+    use_arrow_menu = True
 
     print("Qurio Augmentation Automation")
-    print("Type 'help' to see commands (the old numbered options still work too).\n")
-    _print_status(session)
+    if not use_arrow_menu:
+        print("Type 'help' to see commands (the old numbered options still work too).\n")
+        _print_status(session)
 
     while True:
-        label = f"qurio-aug [{session.last_goal_path}]> " if session.last_goal_path else "qurio-aug> "
-        try:
-            raw = read_command(label)
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return
-        # Confirmed live: PowerShell prepends a BOM (U+FEFF) to the very
-        # first line of piped/redirected stdin -- harmless to strip
-        # unconditionally since it's never a legitimate command character.
-        raw = raw.strip().lstrip("﻿")
-        if not raw:
-            continue
-        cmd, _, rest = raw.partition(" ")
-        cmd, rest = cmd.lower(), rest.strip()
+        if use_arrow_menu:
+            available, selected = _show_arrow_menu(session)
+            if not available:
+                use_arrow_menu = False
+                print("(arrow-key menu unavailable in this console -- "
+                      "falling back to typed commands; 'help' lists them)")
+                _print_status(session)
+                continue
+            if selected is None:
+                return  # Esc/Ctrl-C
+            cmd, rest = selected, ""
+            if cmd == "window":
+                rest = input("Window hint (blank to cancel): ").strip()
+                if not rest:
+                    continue
+        else:
+            label = f"qurio-aug [{session.last_goal_path}]> " if session.last_goal_path else "qurio-aug> "
+            try:
+                raw = read_command(label)
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return
+            # Confirmed live: PowerShell prepends a BOM (U+FEFF) to the
+            # very first line of piped/redirected stdin -- harmless to
+            # strip unconditionally since it's never a legitimate
+            # command character.
+            raw = raw.strip().lstrip("﻿")
+            if not raw:
+                continue
+            cmd, _, rest = raw.partition(" ")
+            cmd, rest = cmd.lower(), rest.strip()
 
         if cmd in ("0", "exit", "quit", "q"):
             return

@@ -6,6 +6,13 @@ project doesn't yet follow strict semantic versioning (it's still beta).
 
 ## [Unreleased]
 
+- Feature: the interactive menu now shows a full-screen, colored
+  arrow-key/number-key menu by default instead of requiring 'help' first
+  -- Up/Down (or a digit) to move, Enter to run immediately, live
+  tesseract/window/goal status displayed above the command list so
+  there's nothing to type before seeing what's going on. Falls back to
+  the typed-command REPL below (same as before) if the full-screen menu
+  can't get a real console either.
 - Fix: the interactive menu crashing outright with a raw Python traceback
   whenever the game window couldn't be found or matched more than one
   window -- plausibly the single most common first-run failure, and
