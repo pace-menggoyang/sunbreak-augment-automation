@@ -6,6 +6,25 @@ project doesn't yet follow strict semantic versioning (it's still beta).
 
 ## [Unreleased]
 
+- Perf (Windows): the download shrinks from a 91.6MB zip (two ~46MB
+  exes) to a single ~47MB exe -- `qurio-aug-calibrate.exe` is gone,
+  folded into `qurio-aug.exe` as a `--calibrate` flag (also reachable
+  from the interactive menu's `calibrate` command, unchanged). The
+  separate exe was carrying its own entire duplicate copy of the Python
+  runtime, Tesseract, and tesserocr just to expose one function
+  (`calibrate.main`) that was already callable from the main exe --
+  `--onefile` packaging has no shared folder to split that payload
+  across, so it was pure duplication for zero unique functionality.
+  Found and fixed a real bug building this: `calibrate.main()` used to
+  fall back to reading `sys.argv[1]` when no explicit hint was passed,
+  which made sense for its own standalone entry point but not when
+  called from *within* `main.py`'s process -- confirmed live,
+  `qurio-aug.exe --calibrate` tried to match a window literally titled
+  `"--calibrate"` before this was caught, since `sys.argv` is
+  process-global, not scoped to the calibrate module. Standalone
+  `python -m qurio_aug.calibrate 'hint'` still works exactly as before;
+  only `calibrate.py`'s own `__main__` block reads `sys.argv` now.
+
 ## [0.1.5-beta] -- 2026-08-25
 
 - Fix: every one of `tui.py`'s colored prompts/messages (max-attempts,

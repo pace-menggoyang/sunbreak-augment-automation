@@ -90,7 +90,8 @@ lowering friction for non-technical users and for whoever ends up
 supporting them.
 
 3. **Guided/interactive calibration.** Calibrating today means running
-   `qurio-aug-calibrate`, eyeballing saved crop PNGs in `logs/`, and
+   `qurio-aug --calibrate` (or the menu's `calibrate` command),
+   eyeballing saved crop PNGs in `logs/`, and
    hand-editing fractional boxes in `configs/regions.yaml` until they
    line up. This is the last step in the whole flow that still requires
    real technical comfort. A guided version (step through each region,

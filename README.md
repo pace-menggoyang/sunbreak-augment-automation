@@ -144,7 +144,8 @@ on an Augmentation Results screen (STATE 4):
 ```sh
 .venv/bin/python -m qurio_aug.calibrate
 ```
-(or `qurio-aug-calibrate` if you're running the compiled build)
+(or `qurio-aug --calibrate`, or the interactive menu's `calibrate`
+command, if you're running the compiled build)
 
 This saves the full screenshot plus per-row name/value crops to `logs/`.
 Check that each crop cleanly frames just the text it's meant to, and that
@@ -248,11 +249,11 @@ pyinstaller packaging/qurio-aug.spec --noconfirm
 ./dist/qurio-aug --selfcheck
 ```
 
-Produces `dist/qurio-aug` and `dist/qurio-aug-calibrate` as standalone
-executables, with Tesseract and all runtime data (skill list, digit
-templates, region config, example goals) bundled in -- no separate
-Tesseract install needed to run them. See `qurio_aug/tesseract_setup.py`
-and the vendoring scripts' comments for how that's wired up.
+Produces `dist/qurio-aug` as a standalone executable, with Tesseract and
+all runtime data (skill list, digit templates, region config, example
+goals) bundled in -- no separate Tesseract install needed to run it. See
+`qurio_aug/tesseract_setup.py` and the vendoring scripts' comments for
+how that's wired up.
 
 ## Project layout
 

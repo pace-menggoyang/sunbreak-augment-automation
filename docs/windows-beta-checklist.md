@@ -40,7 +40,7 @@ game isn't found automatically later, this is what tells us what
 
 With the game sitting on an Augmentation Results screen:
 ```
-qurio-aug-calibrate.exe
+qurio-aug.exe --calibrate
 ```
 
 Paste the console output, and attach the saved crop images from the

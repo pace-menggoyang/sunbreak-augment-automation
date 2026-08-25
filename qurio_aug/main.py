@@ -9,6 +9,10 @@ Usage:
   # Don't have a goal config yet? Build one interactively:
   python -m qurio_aug.main --wizard
 
+  # Check that your window's ROI boxes still line up (saves a screenshot
+  # + per-row crops to logs/ to eyeball):
+  python -m qurio_aug.main --calibrate
+
   # Validate OCR + decision logic against a roll you triggered manually
   # in-game, one call per roll. Never sends the accept/reject/reroll
   # macros (won't change game state) but may send Q/E to page through a
@@ -601,6 +605,12 @@ def main() -> None:
         "through logs/ by hand",
     )
     parser.add_argument(
+        "--calibrate", action="store_true",
+        help="check your calibration against the current game window (saves "
+        "a screenshot + per-row crops to logs/) and exit -- use --window to "
+        "override the window hint from regions.yaml",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="evaluate the roll currently on screen and exit, without accepting/"
@@ -682,14 +692,23 @@ def main() -> None:
         _run_package_failure()
         return
 
+    if args.calibrate:
+        try:
+            calibrate.main(args.window)
+        except (capture.WindowNotFoundError, capture.AmbiguousWindowError, capture.ScreenCapturePermissionError) as e:
+            print(f"{e}", file=sys.stderr)
+            print("-- pass --window to override, or run --list-windows to see what's visible", file=sys.stderr)
+            sys.exit(1)
+        return
+
     if args.wizard:
         run_wizard()
         return
 
     if not args.goal:
         parser.error(
-            "one of --goal, --wizard, --selfcheck, --list-windows, or "
-            "--package-failure is required"
+            "one of --goal, --wizard, --selfcheck, --list-windows, "
+            "--calibrate, or --package-failure is required"
         )
 
     try:

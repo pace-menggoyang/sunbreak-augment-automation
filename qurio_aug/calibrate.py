@@ -30,12 +30,19 @@ LOG_DIR = Path("logs")
 
 
 def main(title_hint: str | None = None) -> None:
-    """title_hint overrides both sys.argv and regions.yaml's own hint --
-    lets the interactive menu drive this with its session's window
-    override instead of needing to fake sys.argv. Standalone invocation
-    (`python -m qurio_aug.calibrate 'hint'`) is unchanged: title_hint is
-    only None here when nothing was passed programmatically, so it falls
-    through to sys.argv same as before.
+    """title_hint overrides regions.yaml's own hint -- lets a caller
+    (the interactive menu with its session's window override, or
+    main.py's own --calibrate flag) drive this directly. Deliberately
+    does NOT fall back to reading sys.argv itself: sys.argv is
+    process-global, not scoped to this module, so a naive "if title_hint
+    is None, check sys.argv[1]" fallback here would happily pick up
+    *main.py's own* --calibrate flag as the hint the moment this got
+    called from within main.py's argparse dispatch instead of run as its
+    own standalone process -- confirmed live: `qurio-aug.exe --calibrate`
+    tried to match a window titled "--calibrate". Standalone invocation
+    (`python -m qurio_aug.calibrate 'hint'`) still works exactly as
+    before -- see __main__ below, which is the only place sys.argv
+    should ever be read for this.
 
     Raises capture.WindowNotFoundError/AmbiguousWindowError on a bad hint
     (via the same shared capture.find_game_window validation
@@ -53,8 +60,6 @@ def main(title_hint: str | None = None) -> None:
         sys.stdout.reconfigure(errors="replace")
         sys.stderr.reconfigure(errors="replace")
     configure_tesseract()
-    if title_hint is None and len(sys.argv) > 1:
-        title_hint = sys.argv[1]
     region_config = ocr.load_region_config()
     hint = title_hint or region_config.window_title_hint
 
@@ -115,7 +120,7 @@ def main(title_hint: str | None = None) -> None:
 
 if __name__ == "__main__":
     try:
-        main()
+        main(sys.argv[1] if len(sys.argv) > 1 else None)
     except (capture.WindowNotFoundError, capture.AmbiguousWindowError) as e:
         print(f"{e}\nPass a different hint, e.g.:\n  python -m qurio_aug.calibrate 'Monster Hunter'",
               file=sys.stderr)

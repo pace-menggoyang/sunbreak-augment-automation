@@ -356,8 +356,34 @@ def test_run_with_window_recovery_gives_up_on_cancel(monkeypatch):
 # instead of faking sys.argv. ---
 
 
-def test_calibrate_main_uses_explicit_title_hint_over_argv(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["qurio-aug-calibrate", "argv-hint"])
+def test_calibrate_main_ignores_sys_argv_entirely(monkeypatch):
+    # calibrate.main() must never read sys.argv itself -- sys.argv is
+    # process-global, not scoped to this module, so a fallback here
+    # would wrongly pick up whatever flag main.py's own argparse
+    # dispatch was invoked with. Confirmed live: `qurio-aug.exe
+    # --calibrate` tried to match a window literally titled
+    # "--calibrate" before this was fixed. Only calibrate.py's own
+    # standalone __main__ block may read sys.argv now.
+    monkeypatch.setattr(sys, "argv", ["qurio-aug.exe", "--calibrate"])
+    monkeypatch.setattr(calibrate, "configure_tesseract", lambda: None)
+    seen = {}
+
+    def fake_find_windows(hint):
+        seen["hint"] = hint
+        return []
+
+    monkeypatch.setattr(capture, "find_windows", fake_find_windows)
+    expected_hint = ocr.load_region_config().window_title_hint
+    try:
+        calibrate.main()  # no explicit hint -- must fall back to region_config, never sys.argv[1]
+    except capture.WindowNotFoundError:
+        pass
+    assert seen["hint"] == expected_hint
+    assert seen["hint"] != "--calibrate"
+
+
+def test_calibrate_main_uses_explicit_title_hint(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["qurio-aug.exe", "--calibrate"])
     monkeypatch.setattr(calibrate, "configure_tesseract", lambda: None)
     seen = {}
 
@@ -382,7 +408,7 @@ def test_calibrate_main_raises_on_ambiguous_match(monkeypatch):
     # state_machine.py uses (raises AmbiguousWindowError) so the REPL's
     # _run_with_window_recovery can offer a pick instead of silently
     # guessing which window was meant.
-    monkeypatch.setattr(sys, "argv", ["qurio-aug-calibrate"])
+    monkeypatch.setattr(sys, "argv", ["qurio-aug.exe", "--calibrate"])
     monkeypatch.setattr(calibrate, "configure_tesseract", lambda: None)
     matches = [_window(wid=1), _window(owner="Discord.exe", title="Discord", wid=2)]
     monkeypatch.setattr(capture, "find_windows", lambda hint: matches)
