@@ -128,3 +128,11 @@ jobs:
               qurio-aug-macos.zip qurio-aug-windows.zip \
               --generate-notes
           fi
+
+          # Belt-and-suspenders: a release has shown up as an unpublished
+          # draft here at least once despite "gh release create" defaulting
+          # to published and no --draft flag being passed anywhere above --
+          # cause unconfirmed (GitHub Actions job logs aren't visible to
+          # the default GITHUB_TOKEN's API access). Force it published
+          # either way rather than relying on that default silently holding.
+          gh release edit "${{ github.ref_name }}" --draft=false
