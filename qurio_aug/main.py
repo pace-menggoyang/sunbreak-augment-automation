@@ -37,17 +37,11 @@ from pathlib import Path
 from typing import Callable
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.application import Application
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import Layout, Window
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.styles import Style
-from prompt_toolkit.widgets import Frame
 
-from qurio_aug import calibrate, capture, ocr, state_machine
+from qurio_aug import calibrate, capture, ocr, state_machine, tui
 from qurio_aug.goal_config import GoalValidationError, load_goal
 from qurio_aug.goal_wizard import run_editor, run_wizard
 from qurio_aug.hotkeys import DEFAULT_START_HOTKEY, DEFAULT_STOP_HOTKEY, HotkeyController
@@ -154,35 +148,30 @@ def _run_package_failure() -> None:
 
 def _select_goal_path(default: str | None = None) -> str | None:
     """Lists goal YAMLs from _GOAL_SEARCH_DIRS and lets the user pick one
-    by number, or type/paste a path themselves -- so the interactive menu
-    doesn't require already knowing (or typing out) a file path.
+    via the arrow-key menu (with an "Enter a custom path..." escape
+    hatch), so picking a goal doesn't require already knowing a file
+    path.
 
-    `default` (the REPL session's last-used goal, if any) is returned on
-    blank input instead of None -- lets repeat dry-run/farm invocations
-    just hit Enter to reuse the same goal rather than re-picking from the
-    list every time. Omitting it preserves the original "blank cancels"
-    behavior exactly (used by `edit`, which has no session goal to reuse).
+    `default` (the REPL session's last-used goal, if any) pre-highlights
+    that entry and is what's returned if the picker is cancelled --
+    lets repeat dry-run/farm invocations just confirm the same goal
+    instead of re-picking from the list every time. Omitting it
+    preserves the original "cancel returns None" behavior (used by
+    `edit`, which has no session goal to reuse).
     """
     candidates = [p for d in _GOAL_SEARCH_DIRS if d.is_dir() for p in sorted(d.glob("*.yaml"))]
-    if candidates:
-        print("\nAvailable goal configs:")
-        for i, p in enumerate(candidates, 1):
-            print(f"  {i}. {p}")
-    else:
+    if not candidates:
         print("\nNo goal configs found yet in configs/goals/ or goals/ -- "
-              "build one first with the wizard (option 1).")
-    prompt = f"\nPick a number, or paste a path to a goal YAML (blank for {default}): " if default else \
-        "\nPick a number, or paste a path to a goal YAML (blank to cancel): "
-    raw = input(prompt).strip()
-    if not raw:
+              "build one first with the wizard.")
+        return tui.ask_text("Path to a goal YAML (blank to cancel): ") or default
+
+    items = [(str(p), str(p)) for p in candidates] + [("__custom__", "Enter a custom path...")]
+    choice = tui.pick("Select a goal", items, default=default, on_ctrl_c="cancel")
+    if choice is None:
         return default
-    if raw.isdigit():
-        idx = int(raw)
-        if 1 <= idx <= len(candidates):
-            return str(candidates[idx - 1])
-        print(f"{idx} isn't one of the listed options.")
-        return None
-    return raw  # typed/pasted path, used as-is
+    if choice == "__custom__":
+        return tui.ask_text("Path to a goal YAML: ") or None
+    return choice
 
 
 def _prompt_max_attempts(default: int) -> int:
@@ -231,24 +220,16 @@ def _resolve_window_hint(session: _SessionState) -> str:
 
 
 def _pick_window_interactively(matches: list[capture.WindowInfo]) -> capture.WindowInfo | None:
-    """Same shape as _select_goal_path (numbered list, blank cancels) --
-    lets _recover_window_error offer a concrete choice instead of just
-    telling the user to go run --list-windows themselves.
+    """Arrow-key pick from the visible-window list -- lets
+    _recover_window_error offer a concrete choice instead of just
+    telling the user to go run --list-windows themselves. on_ctrl_c=
+    "cancel" since this is a single-level picker embedded directly in
+    the main REPL's dispatch, not a nested wizard flow -- cancelling
+    just returns to the menu that's already the right place to land.
     """
-    print("\nVisible windows:")
-    for i, w in enumerate(matches, 1):
-        print(f"  {i}. owner={w.owner_name!r} title={w.title!r}")
-    raw = input("\nPick a number (blank to cancel): ").strip()
-    if not raw:
-        return None
-    if raw.isdigit():
-        idx = int(raw)
-        if 1 <= idx <= len(matches):
-            return matches[idx - 1]
-        print(f"{idx} isn't one of the listed options.")
-        return None
-    print(f"{raw!r} isn't a number.")
-    return None
+    labels = [f"owner={w.owner_name!r} title={w.title!r}" for w in matches]
+    idx = tui.pick_index("Visible windows", labels, on_ctrl_c="cancel")
+    return matches[idx] if idx is not None else None
 
 
 def _recover_window_error(err: Exception, session: _SessionState) -> bool:
@@ -396,109 +377,19 @@ _MENU_ITEMS: list[tuple[str, str]] = [
     ("exit", "Exit"),
 ]
 
-# Generated once via `pyfiglet.figlet_format("QURIO", font="small")` and
-# hardcoded here -- not worth a runtime dependency for a static string.
-_BANNER = [
-    r"  ___  _   _ ___ ___ ___  ",
-    r" / _ \| | | | _ \_ _/ _ \ ",
-    r"| (_) | |_| |   /| | (_) |",
-    r" \__\_\\___/|_|_\___\___/ ",
-]
-
-_MENU_STYLE = Style.from_dict({
-    "frame.border": "#00d7d7",
-    "frame.label": "bold #00d7d7",
-    "banner": "bold #00d7d7",
-    "tagline": "#5f8787 italic",
-    "status-good": "#00d787",
-    "status-warn": "#ffaf00",
-    "status-bad": "#ff5f5f",
-    "status-neutral": "#8a8a8a",
-    "item": "#d0d0d0",
-    "item-number": "#5f8787",
-    "selected": "bg:#00d7d7 #000000 bold",
-    "help": "#5f5f5f italic",
-})
-
-
-def _build_arrow_menu_app(session: _SessionState) -> Application[str | None]:
-    """A full-screen arrow-key/number-key menu (Up/Down or a digit to
-    move, Enter to run immediately -- no separate "Ok" button to tab to,
-    unlike prompt_toolkit's own radiolist_dialog) showing live
-    tesseract/window/goal status above the command list, so both are
-    visible without needing to type 'status'/'help' first. Rebuilt fresh
-    every loop iteration (see _interactive_menu) so status reflects
-    whatever changed since the last command.
-    """
-    selected = [0]
-    status = _status_fragments(session)
-
-    def get_text():
-        fragments = []
-        for line in _BANNER:
-            fragments.append(("class:banner", line + "\n"))
-        fragments.append(("class:tagline", "Augmentation Automation\n\n"))
-        fragments.extend(status)
-        fragments.append(("", "\n"))
-        for i, (_, label) in enumerate(_MENU_ITEMS):
-            number = f"{i + 1}. " if i < 9 else "   "
-            if i == selected[0]:
-                fragments.append(("class:selected", f" > {number}{label} \n"))
-            else:
-                fragments.append(("class:item-number", f"   {number}"))
-                fragments.append(("class:item", f"{label}\n"))
-        fragments.append(("class:help", "\nUp/Down or a number to move, Enter to run, Esc/Ctrl-C to exit.\n"))
-        return fragments
-
-    kb = KeyBindings()
-
-    @kb.add("up")
-    def _move_up(event) -> None:
-        selected[0] = (selected[0] - 1) % len(_MENU_ITEMS)
-
-    @kb.add("down")
-    def _move_down(event) -> None:
-        selected[0] = (selected[0] + 1) % len(_MENU_ITEMS)
-
-    @kb.add("enter")
-    def _confirm(event) -> None:
-        event.app.exit(result=_MENU_ITEMS[selected[0]][0])
-
-    @kb.add("c-c")
-    @kb.add("escape")
-    def _cancel(event) -> None:
-        event.app.exit(result=None)
-
-    for i in range(min(len(_MENU_ITEMS), 9)):
-        @kb.add(str(i + 1))
-        def _jump(event, i=i) -> None:
-            event.app.exit(result=_MENU_ITEMS[i][0])
-
-    body = Frame(Window(FormattedTextControl(get_text)), title="Qurio Augmentation Automation")
-    return Application(
-        layout=Layout(body),
-        key_bindings=kb,
-        style=_MENU_STYLE,
-        full_screen=True,
-        mouse_support=True,
-    )
-
-
 def _show_arrow_menu(session: _SessionState) -> tuple[bool, str | None]:
-    """Returns (available, selected_id). available=False means the
-    full-screen UI couldn't even be shown (no real console -- confirmed
-    live: this fails the same way _make_command_reader's PromptSession
-    does when stdout is redirected/piped), so the caller should fall
-    back to the typed-command REPL for the rest of the session.
-    selected_id is None when available=True but the user cancelled
-    (Esc/Ctrl-C), which exits the whole program.
+    """Returns (available, selected_id) -- see tui.show_arrow_menu.
+    available=False means the full-screen UI couldn't even be shown (no
+    real console), so the caller should fall back to the typed-command
+    REPL for the rest of the session. selected_id is None when
+    available=True but the user cancelled (Esc/Ctrl-C), which exits the
+    whole program -- on_ctrl_c="cancel" since this *is* the top level,
+    there's no parent menu to abort back to.
     """
-    try:
-        app = _build_arrow_menu_app(session)
-        result = app.run()
-    except Exception:
-        return False, None
-    return True, result
+    return tui.show_arrow_menu(
+        "Qurio Augmentation Automation", _MENU_ITEMS, _status_fragments(session),
+        show_banner=True, on_ctrl_c="cancel",
+    )
 
 
 def _interactive_menu() -> None:

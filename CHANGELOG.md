@@ -6,6 +6,27 @@ project doesn't yet follow strict semantic versioning (it's still beta).
 
 ## [Unreleased]
 
+- Feature: every menu in the app -- not just the top-level one -- is now
+  the same arrow-key widget: picking a goal file, recovering from a
+  window error, the whole wizard/editor (building a new goal, editing
+  protected skills/profiles, renaming, augment-type selection). Extracted
+  the widget into a new shared `qurio_aug/tui.py` (`pick`/`pick_index`/
+  `ask_yes_no`, all degrading to a plain numbered picker automatically if
+  the console can't show it) instead of it living only in `main.py`.
+  Free-text entry (goal/skill names, levels, custom paths) gets the same
+  color treatment via `tui.ask_text`/`ask_int`, plus live tab-completion
+  over the real skill list while typing one in (`ask_text_with_completion`).
+  Ctrl+C still aborts the whole wizard/editor from any nested menu, not
+  just the one currently open -- confirmed against prompt_toolkit's own
+  `Application.exit(exception=...)`, the documented way for a full-screen
+  app to propagate a real exception after restoring the terminal, rather
+  than the naive approach (a menu's own Ctrl+C binding) which would have
+  silently only cancelled that one menu instead.
+  Found only by actually running the compiled exe end-to-end (wizard and
+  editor both, not just piped/synthetic input): `tui.pick`'s fallback
+  picker was dropping the goal/profile summary shown above each wizard
+  menu entirely when degrading to plain numbered input, instead of just
+  losing its color -- fixed to still print it as plain text.
 - Fix: a command's output (a farm run's live progress, a force-stop/
   give-up result, a goal validation error) getting silently covered up
   the instant the arrow-key menu redrew, before there was any chance to

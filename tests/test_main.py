@@ -84,37 +84,63 @@ def test_execute_full_run_unreadable_returns_2(monkeypatch):
 # project's configs/goals and goals directories via a temp dir. ---
 
 
-def test_select_goal_path_by_number(monkeypatch):
+def test_select_goal_path_returns_pick_result(monkeypatch):
+    # Number/out-of-range parsing itself is tui.pick's own concern now
+    # (tested in test_tui.py) -- this just confirms _select_goal_path
+    # offers every discovered candidate plus the custom-path escape
+    # hatch, and returns tui.pick's result as-is.
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         (d / "a.yaml").write_text("dummy")
         (d / "b.yaml").write_text("dummy")
         monkeypatch.setattr(main, "_GOAL_SEARCH_DIRS", (d,))
-        monkeypatch.setattr(builtins, "input", lambda prompt="": "2")
+        seen = {}
+
+        def fake_pick(title, items, default=None, on_ctrl_c="raise"):
+            seen["items"] = items
+            return str(d / "b.yaml")
+
+        monkeypatch.setattr(main.tui, "pick", fake_pick)
         assert main._select_goal_path() == str(d / "b.yaml")
+        ids = [item_id for item_id, _ in seen["items"]]
+        assert str(d / "a.yaml") in ids
+        assert str(d / "b.yaml") in ids
+        assert "__custom__" in ids
 
 
-def test_select_goal_path_custom_typed_path(monkeypatch):
-    with tempfile.TemporaryDirectory() as d:
-        monkeypatch.setattr(main, "_GOAL_SEARCH_DIRS", (Path(d),))
-        monkeypatch.setattr(builtins, "input", lambda prompt="": "/some/custom/path.yaml")
-        assert main._select_goal_path() == "/some/custom/path.yaml"
-
-
-def test_select_goal_path_blank_cancels(monkeypatch):
-    with tempfile.TemporaryDirectory() as d:
-        monkeypatch.setattr(main, "_GOAL_SEARCH_DIRS", (Path(d),))
-        monkeypatch.setattr(builtins, "input", lambda prompt="": "")
-        assert main._select_goal_path() is None
-
-
-def test_select_goal_path_out_of_range_number_returns_none(monkeypatch):
+def test_select_goal_path_custom_entry_prompts_for_path(monkeypatch):
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         (d / "a.yaml").write_text("dummy")
         monkeypatch.setattr(main, "_GOAL_SEARCH_DIRS", (d,))
-        monkeypatch.setattr(builtins, "input", lambda prompt="": "99")
+        monkeypatch.setattr(main.tui, "pick", lambda *a, **kw: "__custom__")
+        monkeypatch.setattr(main.tui, "ask_text", lambda prompt: "/some/custom/path.yaml")
+        assert main._select_goal_path() == "/some/custom/path.yaml"
+
+
+def test_select_goal_path_cancel_returns_default(monkeypatch):
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "a.yaml").write_text("dummy")
+        monkeypatch.setattr(main, "_GOAL_SEARCH_DIRS", (d,))
+        monkeypatch.setattr(main.tui, "pick", lambda *a, **kw: None)
         assert main._select_goal_path() is None
+        assert main._select_goal_path(default="configs/goals/last-used.yaml") == \
+            "configs/goals/last-used.yaml"
+
+
+def test_select_goal_path_no_candidates_prompts_directly(monkeypatch):
+    # Zero discovered goals -- skip the picker (nothing to list) and go
+    # straight to a text prompt instead.
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr(main, "_GOAL_SEARCH_DIRS", (Path(d),))
+
+        def boom(*a, **kw):
+            raise AssertionError("should not show a picker with zero candidates")
+
+        monkeypatch.setattr(main.tui, "pick", boom)
+        monkeypatch.setattr(main.tui, "ask_text", lambda prompt: "/typed/path.yaml")
+        assert main._select_goal_path() == "/typed/path.yaml"
 
 
 def test_select_goal_path_searches_both_dirs(monkeypatch):
@@ -123,8 +149,17 @@ def test_select_goal_path_searches_both_dirs(monkeypatch):
         (d1 / "a.yaml").write_text("dummy")
         (d2 / "b.yaml").write_text("dummy")
         monkeypatch.setattr(main, "_GOAL_SEARCH_DIRS", (d1, d2))
-        monkeypatch.setattr(builtins, "input", lambda prompt="": "2")
+        seen = {}
+
+        def fake_pick(title, items, default=None, on_ctrl_c="raise"):
+            seen["items"] = items
+            return str(d2 / "b.yaml")
+
+        monkeypatch.setattr(main.tui, "pick", fake_pick)
         assert main._select_goal_path() == str(d2 / "b.yaml")
+        ids = [item_id for item_id, _ in seen["items"]]
+        assert str(d1 / "a.yaml") in ids
+        assert str(d2 / "b.yaml") in ids
 
 
 # --- _prompt_max_attempts: blank keeps the default, a positive number
@@ -149,19 +184,6 @@ def test_prompt_max_attempts_zero_falls_back_to_default(monkeypatch):
 def test_prompt_max_attempts_non_numeric_falls_back_to_default(monkeypatch):
     monkeypatch.setattr(builtins, "input", lambda prompt="": "abc")
     assert main._prompt_max_attempts(300) == 300
-
-
-# --- _select_goal_path: default (the REPL session's last-used goal, if
-# any) is returned on blank input instead of None, so repeat dry-run/farm
-# invocations can just hit Enter to reuse it. ---
-
-
-def test_select_goal_path_blank_returns_default_when_given(monkeypatch):
-    with tempfile.TemporaryDirectory() as d:
-        monkeypatch.setattr(main, "_GOAL_SEARCH_DIRS", (Path(d),))
-        monkeypatch.setattr(builtins, "input", lambda prompt="": "")
-        assert main._select_goal_path(default="configs/goals/last-used.yaml") == \
-            "configs/goals/last-used.yaml"
 
 
 # --- _resolve_window_hint: session override vs. regions.yaml's own hint,
@@ -194,24 +216,18 @@ def test_resolve_window_hint_prefers_session_override():
     assert main._resolve_window_hint(session) == "MonsterHunterRise.exe"
 
 
-def test_pick_window_interactively_by_number(monkeypatch):
+def test_pick_window_interactively_returns_matched_window(monkeypatch):
+    # Index parsing/out-of-range handling is tui.pick_index's own concern
+    # now (tested in test_tui.py) -- this just confirms
+    # _pick_window_interactively builds the right labels and maps the
+    # returned index back to the right WindowInfo.
     matches = [_window(wid=1), _window(owner="Discord.exe", title="Discord", wid=2)]
-    monkeypatch.setattr(builtins, "input", lambda prompt="": "2")
+    monkeypatch.setattr(main.tui, "pick_index", lambda title, entries, default=None, on_ctrl_c="raise": 1)
     assert main._pick_window_interactively(matches) == matches[1]
 
 
-def test_pick_window_interactively_blank_cancels(monkeypatch):
-    monkeypatch.setattr(builtins, "input", lambda prompt="": "")
-    assert main._pick_window_interactively([_window()]) is None
-
-
-def test_pick_window_interactively_out_of_range_returns_none(monkeypatch):
-    monkeypatch.setattr(builtins, "input", lambda prompt="": "99")
-    assert main._pick_window_interactively([_window()]) is None
-
-
-def test_pick_window_interactively_non_numeric_returns_none(monkeypatch):
-    monkeypatch.setattr(builtins, "input", lambda prompt="": "abc")
+def test_pick_window_interactively_cancel_returns_none(monkeypatch):
+    monkeypatch.setattr(main.tui, "pick_index", lambda *a, **kw: None)
     assert main._pick_window_interactively([_window()]) is None
 
 
@@ -409,7 +425,7 @@ def test_show_arrow_menu_falls_back_when_construction_fails(monkeypatch):
     def boom(**kw):
         raise Exception("simulated: no console")
 
-    monkeypatch.setattr(main, "Application", boom)
+    monkeypatch.setattr(main.tui, "Application", boom)
     session = main._SessionState(region_config=_DUMMY_REGION_CONFIG)
     available, selected = main._show_arrow_menu(session)
     assert available is False

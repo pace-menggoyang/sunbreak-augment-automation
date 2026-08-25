@@ -8,6 +8,15 @@ goal_config.validate_goal (which still runs too, as a final check, since
 a wizard bug shouldn't be trusted any more than a hand-edited file's typo
 would be).
 
+All choice-menus go through tui.py's arrow-key widget (tui.pick/
+pick_index/ask_yes_no), the same one main.py's top-level menu uses, so
+this looks and behaves consistently with the rest of the app. Every one
+of those calls uses tui's default on_ctrl_c="raise": Ctrl+C anywhere in
+here still aborts the whole wizard/editor (propagates as a real
+KeyboardInterrupt up to main.py's top-level catch), exactly like it did
+when this was all plain input() -- a menu's own Escape key still just
+backs out of that one menu/step, not the whole flow.
+
 Run via `python -m qurio_aug.main --wizard` (see main.py).
 """
 from __future__ import annotations
@@ -17,45 +26,16 @@ from pathlib import Path
 
 import yaml
 
-from qurio_aug import skills_db
+from qurio_aug import skills_db, tui
 from qurio_aug.goal_config import validate_goal
 from qurio_aug.decision import Goal, Profile, RequiredSkill
 
 GOALS_DIR = Path("goals")
 
-
-def _ask(prompt: str) -> str:
-    return input(prompt).strip()
-
-
-def _ask_yes_no(prompt: str, default: bool = False) -> bool:
-    suffix = "[Y/n]" if default else "[y/N]"
-    raw = _ask(f"{prompt} {suffix} ").lower()
-    if not raw:
-        return default
-    return raw.startswith("y")
-
-
-def _ask_int(prompt: str, default: int) -> int:
-    raw = _ask(f"{prompt} (default {default}): ")
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        print(f"  not a number, using default ({default})")
-        return default
-
-
-def _ask_skill_list(prompt_label: str) -> list[str]:
-    print(f"{prompt_label} (enter one at a time, blank line when done):")
-    names = []
-    while True:
-        raw = _ask(f"  skill {len(names) + 1} (or blank to finish): ")
-        if not raw:
-            break
-        names.append(_resolve_skill_name(raw))
-    return names
+_AUGMENT_TYPES: list[tuple[str, str]] = [
+    ("skills_plus", "skills_plus (gain/lose skill levels)"),
+    ("regular", "regular (Defense/Slots/Resistance)"),
+]
 
 
 def _resolve_skill_name(raw: str) -> str:
@@ -71,41 +51,56 @@ def _resolve_skill_name(raw: str) -> str:
             return raw
         skill, score = skills_db.match_skill_name(raw)
         if skill is not None and skill.name != raw:
-            if _ask_yes_no(f"    '{raw}' isn't an exact match -- did you mean '{skill.name}'?", default=True):
+            if tui.ask_yes_no(f"    '{raw}' isn't an exact match -- did you mean '{skill.name}'?", default=True):
                 return skill.name
-            raw = _ask("    type it again: ").strip()
+            raw = tui.ask_text("    type it again: ")
             continue
         if skill is not None:
             return skill.name
-        if _ask_yes_no(f"    '{raw}' isn't a recognized skill and no close match was found -- use it anyway?"):
+        if tui.ask_yes_no(f"    '{raw}' isn't a recognized skill and no close match was found -- use it anyway?"):
             return raw
-        raw = _ask("    type it again: ").strip()
+        raw = tui.ask_text("    type it again: ")
+
+
+def _ask_skill_list(prompt_label: str) -> list[str]:
+    tui.print_header(f"{prompt_label} (enter one at a time, blank line when done):")
+    names = []
+    all_names = skills_db.all_skill_names()
+    while True:
+        raw = tui.ask_text_with_completion(f"  skill {len(names) + 1} (or blank to finish): ", all_names)
+        if not raw:
+            break
+        names.append(_resolve_skill_name(raw))
+    return names
 
 
 def _ask_profile(index: int) -> Profile:
-    print(f"\n--- Profile {index} ---")
-    label = _ask("Optional label for this profile (blank to skip): ")
+    tui.print_header(f"--- Profile {index} ---")
+    label = tui.ask_text("Optional label for this profile (blank to skip): ")
 
     required_names = []
-    print("Required skills for this profile (at least one, blank line when done):")
+    tui.print_header("Required skills for this profile (at least one, blank line when done):")
+    all_names = skills_db.all_skill_names()
     while True:
-        raw = _ask(f"  required skill {len(required_names) + 1} (or blank to finish): ")
+        raw = tui.ask_text_with_completion(
+            f"  required skill {len(required_names) + 1} (or blank to finish): ", all_names,
+        )
         if not raw:
             if required_names:
                 break
-            print("  a profile needs at least one required skill.")
+            print(tui.warn("  a profile needs at least one required skill."))
             continue
         required_names.append(_resolve_skill_name(raw))
 
     required = []
     for name in required_names:
-        min_level = _ask_int(f"  minimum level for '{name}'", default=1)
+        min_level = tui.ask_int(f"  minimum level for '{name}'", default=1)
         required.append(RequiredSkill(name=name, min_level=min_level))
 
     allowed = _ask_skill_list("Additional skills that are OK to gain alongside the required ones (optional)")
     min_additional = 0
     if allowed:
-        min_additional = _ask_int("Minimum number of those additional skills required", default=0)
+        min_additional = tui.ask_int("Minimum number of those additional skills required", default=0)
 
     return Profile(
         required_skills=tuple(required),
@@ -149,20 +144,19 @@ def _goal_to_raw_dict(goal: Goal) -> dict:
 
 
 def run_wizard() -> Path:
-    print("Qurio augmentation goal wizard -- answers build a goal YAML you\n"
-          "can review/edit afterward. Press Ctrl+C at any point to cancel.\n")
+    tui.print_header("Qurio augmentation goal wizard")
+    print("Answers build a goal YAML you can review/edit afterward. Ctrl+C at any point cancels.")
 
-    name = _ask("Goal name (used in logs and the output filename): ")
+    name = tui.ask_text("Goal name (used in logs and the output filename): ")
     while not name:
-        name = _ask("Goal name can't be blank: ")
+        name = tui.ask_text("Goal name can't be blank: ")
 
-    augment_type = ""
-    while augment_type not in ("skills_plus", "regular"):
-        augment_type = _ask("Augment type -- 'skills_plus' or 'regular' (must match what "
-                             "you select in-game): ").strip().lower()
+    augment_type = tui.pick("Augment type (must match what you select in-game)", _AUGMENT_TYPES)
+    while augment_type is None:
+        augment_type = tui.pick("Augment type is required -- pick one", _AUGMENT_TYPES)
 
     protected = _ask_skill_list(
-        "\nProtected skills -- reject any roll that loses or fully removes "
+        "Protected skills -- reject any roll that loses or fully removes "
         "these, no matter what else it does (optional)"
     )
 
@@ -171,7 +165,7 @@ def run_wizard() -> Path:
     while True:
         profiles.append(_ask_profile(i))
         i += 1
-        if not _ask_yes_no("\nAdd another profile (roll accepted if ANY profile matches)?"):
+        if not tui.ask_yes_no("Add another profile (roll accepted if ANY profile matches)?"):
             break
 
     goal = Goal(
@@ -188,49 +182,57 @@ def run_wizard() -> Path:
     out_path = GOALS_DIR / f"{_slug(name)}.yaml"
     out_path.write_text(yaml.safe_dump(raw, sort_keys=False, default_flow_style=False))
 
-    print(f"\nWrote {out_path.resolve()}")
+    tui.print_success(f"\nWrote {out_path.resolve()}")
     print(f"Next: python -m qurio_aug.main --goal {out_path} --dry-run")
     return out_path
 
 
-def _display_goal(goal: Goal) -> None:
-    print(f"\nname: {goal.name}")
-    print(f"augment_type: {goal.augment_type}")
-    print("protected_skills: " + (", ".join(sorted(goal.protected_skills)) or "(none)"))
+def _display_goal(goal: Goal) -> list[tuple[str, str]]:
+    """Colored fragments describing `goal` -- passed as `body=` to
+    run_editor's top-level tui.pick call, mirroring the main REPL menu's
+    own "status above the command list" layout instead of printing the
+    summary separately before a distinct menu.
+    """
+    frags: list[tuple[str, str]] = [
+        ("class:status-neutral", "name: "), ("", f"{goal.name}\n"),
+        ("class:status-neutral", "augment_type: "), ("", f"{goal.augment_type}\n"),
+        ("class:status-neutral", "protected_skills: "),
+        ("", (", ".join(sorted(goal.protected_skills)) or "(none)") + "\n"),
+    ]
     for i, p in enumerate(goal.profiles, 1):
         label = f" ({p.name})" if p.name else ""
-        print(f"profile {i}{label}:")
+        frags.append(("class:status-neutral", f"profile {i}{label}:\n"))
         for r in p.required_skills:
-            print(f"  required: {r.name} (min level {r.min_level})")
+            frags.append(("", f"  required: {r.name} (min level {r.min_level})\n"))
         if p.allowed_additional_skills:
-            print(f"  allowed additional: {', '.join(sorted(p.allowed_additional_skills))} "
-                  f"(min {p.min_additional_skills} required)")
+            frags.append(("", f"  allowed additional: {', '.join(sorted(p.allowed_additional_skills))} "
+                               f"(min {p.min_additional_skills} required)\n"))
+    return frags
 
 
 def _edit_protected_skills(protected: frozenset[str]) -> frozenset[str]:
     current = set(protected)
     while True:
-        print("\nProtected skills: " + (", ".join(sorted(current)) or "(none)"))
-        print("  1. Add a skill\n  2. Remove a skill\n  0. Done")
-        choice = _ask("choice: ")
-        if choice == "1":
-            name = _ask("  skill to protect: ")
+        body = [("", "Protected skills: " + (", ".join(sorted(current)) or "(none)") + "\n")]
+        choice = tui.pick("Edit protected skills", [
+            ("add", "Add a skill"),
+            ("remove", "Remove a skill"),
+            ("done", "Done"),
+        ], body=body)
+        if choice == "add":
+            name = tui.ask_text_with_completion("  skill to protect: ", skills_db.all_skill_names())
             if name:
                 current.add(_resolve_skill_name(name))
-        elif choice == "2":
+        elif choice == "remove":
             if not current:
-                print("  nothing to remove.")
+                print(tui.warn("  nothing to remove."))
                 continue
             names = sorted(current)
-            for i, n in enumerate(names, 1):
-                print(f"    {i}. {n}")
-            raw = _ask("  remove which number (blank to cancel): ")
-            if raw.isdigit() and 1 <= int(raw) <= len(names):
-                current.discard(names[int(raw) - 1])
-        elif choice in ("0", ""):
+            idx = tui.pick_index("Remove which skill?", names)
+            if idx is not None:
+                current.discard(names[idx])
+        elif choice in ("done", None):
             return frozenset(current)
-        else:
-            print(f"  {choice!r} isn't one of the options above.")
 
 
 def _edit_profile(profile: Profile) -> Profile:
@@ -240,69 +242,66 @@ def _edit_profile(profile: Profile) -> Profile:
     label = profile.name
 
     while True:
-        print(f"\nEditing profile{f' ({label})' if label else ''}:")
+        title = f"Editing profile{f' ({label})' if label else ''}"
+        body: list[tuple[str, str]] = []
         for i, r in enumerate(required, 1):
-            print(f"  {i}. {r.name} (min level {r.min_level})")
-        print("  allowed additional: " + (", ".join(sorted(allowed)) or "(none)")
-              + (f" (min {min_additional} required)" if allowed else ""))
-        print("""
-  1. Add a required skill
-  2. Remove a required skill
-  3. Change a required skill's minimum level
-  4. Add an allowed additional skill
-  5. Remove an allowed additional skill
-  6. Change minimum additional skills required
-  7. Rename this profile's label
-  0. Done editing this profile""")
-        choice = _ask("choice: ")
-        if choice == "1":
-            name = _ask("  skill name: ")
+            body.append(("", f"  {i}. {r.name} (min level {r.min_level})\n"))
+        body.append(("", "  allowed additional: " + (", ".join(sorted(allowed)) or "(none)")
+                     + (f" (min {min_additional} required)" if allowed else "") + "\n"))
+
+        choice = tui.pick(title, [
+            ("add_required", "Add a required skill"),
+            ("remove_required", "Remove a required skill"),
+            ("change_level", "Change a required skill's minimum level"),
+            ("add_allowed", "Add an allowed additional skill"),
+            ("remove_allowed", "Remove an allowed additional skill"),
+            ("change_min_additional", "Change minimum additional skills required"),
+            ("rename", "Rename this profile's label"),
+            ("done", "Done editing this profile"),
+        ], body=body)
+
+        if choice == "add_required":
+            name = tui.ask_text_with_completion("  skill name: ", skills_db.all_skill_names())
             if name:
                 name = _resolve_skill_name(name)
-                level = _ask_int(f"  minimum level for '{name}'", default=1)
+                level = tui.ask_int(f"  minimum level for '{name}'", default=1)
                 required.append(RequiredSkill(name=name, min_level=level))
-        elif choice == "2":
+        elif choice == "remove_required":
             if not required:
-                print("  nothing to remove.")
+                print(tui.warn("  nothing to remove."))
                 continue
-            for i, r in enumerate(required, 1):
-                print(f"    {i}. {r.name}")
-            raw = _ask("  remove which number (blank to cancel): ")
-            if raw.isdigit() and 1 <= int(raw) <= len(required):
-                del required[int(raw) - 1]
-        elif choice == "3":
+            idx = tui.pick_index("Remove which required skill?", [r.name for r in required])
+            if idx is not None:
+                del required[idx]
+        elif choice == "change_level":
             if not required:
-                print("  nothing to change.")
+                print(tui.warn("  nothing to change."))
                 continue
-            for i, r in enumerate(required, 1):
-                print(f"    {i}. {r.name} (currently min level {r.min_level})")
-            raw = _ask("  change which number (blank to cancel): ")
-            if raw.isdigit() and 1 <= int(raw) <= len(required):
-                idx = int(raw) - 1
-                new_level = _ask_int(f"  new minimum level for '{required[idx].name}'",
-                                      default=required[idx].min_level)
+            labels = [f"{r.name} (currently min level {r.min_level})" for r in required]
+            idx = tui.pick_index("Change which required skill's level?", labels)
+            if idx is not None:
+                new_level = tui.ask_int(f"  new minimum level for '{required[idx].name}'",
+                                         default=required[idx].min_level)
                 required[idx] = RequiredSkill(name=required[idx].name, min_level=new_level)
-        elif choice == "4":
-            name = _ask("  skill name: ")
+        elif choice == "add_allowed":
+            name = tui.ask_text_with_completion("  skill name: ", skills_db.all_skill_names())
             if name:
                 allowed.add(_resolve_skill_name(name))
-        elif choice == "5":
+        elif choice == "remove_allowed":
             if not allowed:
-                print("  nothing to remove.")
+                print(tui.warn("  nothing to remove."))
                 continue
             names = sorted(allowed)
-            for i, n in enumerate(names, 1):
-                print(f"    {i}. {n}")
-            raw = _ask("  remove which number (blank to cancel): ")
-            if raw.isdigit() and 1 <= int(raw) <= len(names):
-                allowed.discard(names[int(raw) - 1])
-        elif choice == "6":
-            min_additional = _ask_int("  minimum additional skills required", default=min_additional)
-        elif choice == "7":
-            label = _ask("  new label (blank to clear): ")
-        elif choice in ("0", ""):
+            idx = tui.pick_index("Remove which allowed skill?", names)
+            if idx is not None:
+                allowed.discard(names[idx])
+        elif choice == "change_min_additional":
+            min_additional = tui.ask_int("  minimum additional skills required", default=min_additional)
+        elif choice == "rename":
+            label = tui.ask_text("  new label (blank to clear): ")
+        elif choice in ("done", None):
             if not required:
-                print("  a profile needs at least one required skill -- add one before finishing.")
+                print(tui.warn("  a profile needs at least one required skill -- add one before finishing."))
                 continue
             return Profile(
                 required_skills=tuple(required),
@@ -310,8 +309,6 @@ def _edit_profile(profile: Profile) -> Profile:
                 min_additional_skills=min_additional,
                 name=label,
             )
-        else:
-            print(f"  {choice!r} isn't one of the options above.")
 
 
 def run_editor(goal: Goal, path: Path) -> None:
@@ -327,63 +324,58 @@ def run_editor(goal: Goal, path: Path) -> None:
     protected = goal.protected_skills
     profiles = list(goal.profiles)
 
-    print(f"\nEditing {path} -- Ctrl+C at any point discards changes.")
+    tui.print_header(f"Editing {path} -- Ctrl+C at any point discards changes.")
     while True:
-        _display_goal(Goal(name=name, augment_type=augment_type,
-                            profiles=tuple(profiles), protected_skills=protected))
-        print("""
-1. Edit protected skills
-2. Edit an existing profile
-3. Add a new profile
-4. Remove a profile
-5. Rename goal / change augment type
-0. Save and exit""")
-        choice = _ask("\nChoice: ")
-        if choice == "1":
+        current_goal = Goal(name=name, augment_type=augment_type,
+                             profiles=tuple(profiles), protected_skills=protected)
+        choice = tui.pick(f"Editing {name}", [
+            ("edit_protected", "Edit protected skills"),
+            ("edit_profile", "Edit an existing profile"),
+            ("add_profile", "Add a new profile"),
+            ("remove_profile", "Remove a profile"),
+            ("rename", "Rename goal / change augment type"),
+            ("save", "Save and exit"),
+        ], body=_display_goal(current_goal))
+
+        if choice == "edit_protected":
             protected = _edit_protected_skills(protected)
-        elif choice == "2":
+        elif choice == "edit_profile":
             if not profiles:
-                print("  no profiles to edit.")
+                print(tui.warn("  no profiles to edit."))
                 continue
-            for i, p in enumerate(profiles, 1):
-                print(f"    {i}. {p.name or '(unlabeled)'}")
-            raw = _ask("  edit which number (blank to cancel): ")
-            if raw.isdigit() and 1 <= int(raw) <= len(profiles):
-                profiles[int(raw) - 1] = _edit_profile(profiles[int(raw) - 1])
-        elif choice == "3":
+            labels = [p.name or "(unlabeled)" for p in profiles]
+            idx = tui.pick_index("Edit which profile?", labels)
+            if idx is not None:
+                profiles[idx] = _edit_profile(profiles[idx])
+        elif choice == "add_profile":
             profiles.append(_ask_profile(len(profiles) + 1))
-        elif choice == "4":
+        elif choice == "remove_profile":
             if not profiles:
-                print("  no profiles to remove.")
+                print(tui.warn("  no profiles to remove."))
                 continue
             if len(profiles) == 1:
-                print("  a goal needs at least one profile -- add another before removing this one.")
+                print(tui.warn("  a goal needs at least one profile -- add another before removing this one."))
                 continue
-            for i, p in enumerate(profiles, 1):
-                print(f"    {i}. {p.name or '(unlabeled)'}")
-            raw = _ask("  remove which number (blank to cancel): ")
-            if raw.isdigit() and 1 <= int(raw) <= len(profiles):
-                del profiles[int(raw) - 1]
-        elif choice == "5":
-            new_name = _ask(f"  new goal name (blank to keep {name!r}): ")
+            labels = [p.name or "(unlabeled)" for p in profiles]
+            idx = tui.pick_index("Remove which profile?", labels)
+            if idx is not None:
+                del profiles[idx]
+        elif choice == "rename":
+            new_name = tui.ask_text(f"  new goal name (blank to keep {name!r}): ")
             if new_name:
                 name = new_name
-            new_type = _ask(
-                f"  new augment type -- 'skills_plus' or 'regular' (blank to keep {augment_type!r}): "
-            ).strip().lower()
-            if new_type in ("skills_plus", "regular"):
+            new_type = tui.pick("  new augment type (Esc to keep current)", _AUGMENT_TYPES, default=augment_type)
+            if new_type is not None:
                 augment_type = new_type
-        elif choice in ("0", ""):
+        elif choice in ("save", None):
             break
-        else:
-            print(f"  {choice!r} isn't one of the options above.")
 
     final_goal = Goal(name=name, augment_type=augment_type,
                        profiles=tuple(profiles), protected_skills=protected)
     validate_goal(final_goal)  # belt-and-suspenders, same rationale as run_wizard
 
     path.write_text(yaml.safe_dump(_goal_to_raw_dict(final_goal), sort_keys=False, default_flow_style=False))
-    print(f"\nSaved changes to {path.resolve()}")
+    tui.print_success(f"\nSaved changes to {path.resolve()}")
 
 
 if __name__ == "__main__":

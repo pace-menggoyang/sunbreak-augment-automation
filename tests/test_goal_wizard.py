@@ -1,12 +1,17 @@
 """Offline tests for goal_wizard.py's editing functions --
 _edit_protected_skills, _edit_profile, and run_editor -- using
-monkeypatched input() so no real terminal interaction is needed. Skill
-names used throughout are real, already-canonical names (confirmed
+monkeypatched tui functions (pick/pick_index/ask_text/ask_int/
+ask_text_with_completion) so no real terminal interaction is needed.
+Skill names used throughout are real, already-canonical names (confirmed
 against data/skills.json, e.g. via configs/goals/hellfire_strife.yaml)
 so _resolve_skill_name's fast exact-match path is exercised, not its
 fuzzy-correction prompt.
+
+_scripted_calls verifies not just the *values* each tui call returns but
+which tui function is called at each step, in order -- since a wrong
+call (e.g. goal_wizard calling tui.pick when this expected tui.ask_text)
+is exactly the kind of bug a plain value-only mock would hide.
 """
-import builtins
 import sys
 import tempfile
 from pathlib import Path
@@ -17,18 +22,32 @@ from qurio_aug import goal_wizard
 from qurio_aug.decision import Goal, Profile, RequiredSkill
 from qurio_aug.goal_config import load_goal
 
+_SCRIPTABLE_TUI_FUNCTIONS = ("pick", "pick_index", "ask_yes_no", "ask_text", "ask_text_with_completion", "ask_int")
 
-def _scripted_input(monkeypatch, answers):
-    it = iter(answers)
-    monkeypatch.setattr(builtins, "input", lambda prompt="": next(it))
+
+def _scripted_calls(monkeypatch, calls):
+    """calls: list of (tui_function_name, return_value) in the exact
+    order goal_wizard is expected to call them.
+    """
+    it = iter(calls)
+
+    def make(name):
+        def fn(*args, **kwargs):
+            expected_name, value = next(it)
+            assert expected_name == name, f"expected next call to be tui.{expected_name}, got tui.{name}"
+            return value
+        return fn
+
+    for name in _SCRIPTABLE_TUI_FUNCTIONS:
+        monkeypatch.setattr(goal_wizard.tui, name, make(name))
 
 
 def test_edit_protected_skills_add_then_remove(monkeypatch):
-    _scripted_input(monkeypatch, [
-        "1", "Agitator",  # add
-        "1", "Burst",     # add
-        "2", "1",         # remove #1 (sorted: Agitator, Burst -> removes Agitator)
-        "0",              # done
+    _scripted_calls(monkeypatch, [
+        ("pick", "add"), ("ask_text_with_completion", "Agitator"),
+        ("pick", "add"), ("ask_text_with_completion", "Burst"),
+        ("pick", "remove"), ("pick_index", 0),  # sorted: Agitator, Burst -> removes Agitator
+        ("pick", "done"),
     ])
     result = goal_wizard._edit_protected_skills(frozenset())
     assert result == frozenset({"Burst"})
@@ -36,13 +55,13 @@ def test_edit_protected_skills_add_then_remove(monkeypatch):
 
 def test_edit_profile_add_change_and_rename(monkeypatch):
     profile = Profile(required_skills=(RequiredSkill("Artillery", min_level=1),))
-    _scripted_input(monkeypatch, [
-        "4", "Coalescence",  # add allowed additional
-        "4", "Handicraft",   # add allowed additional
-        "5", "1",            # remove allowed #1 (sorted: Coalescence, Handicraft -> removes Coalescence)
-        "6", "2",             # min additional skills required
-        "7", "my-label",      # rename profile label
-        "0",                   # done
+    _scripted_calls(monkeypatch, [
+        ("pick", "add_allowed"), ("ask_text_with_completion", "Coalescence"),
+        ("pick", "add_allowed"), ("ask_text_with_completion", "Handicraft"),
+        ("pick", "remove_allowed"), ("pick_index", 0),  # sorted: Coalescence, Handicraft -> removes Coalescence
+        ("pick", "change_min_additional"), ("ask_int", 2),
+        ("pick", "rename"), ("ask_text", "my-label"),
+        ("pick", "done"),
     ])
     result = goal_wizard._edit_profile(profile)
     assert result.required_skills == (RequiredSkill("Artillery", min_level=1),)
@@ -53,9 +72,9 @@ def test_edit_profile_add_change_and_rename(monkeypatch):
 
 def test_edit_profile_change_required_skill_level(monkeypatch):
     profile = Profile(required_skills=(RequiredSkill("Artillery", min_level=1),))
-    _scripted_input(monkeypatch, [
-        "3", "1", "3",  # change required skill #1's minimum level to 3
-        "0",             # done
+    _scripted_calls(monkeypatch, [
+        ("pick", "change_level"), ("pick_index", 0), ("ask_int", 3),
+        ("pick", "done"),
     ])
     result = goal_wizard._edit_profile(profile)
     assert result.required_skills == (RequiredSkill("Artillery", min_level=3),)
@@ -63,14 +82,35 @@ def test_edit_profile_change_required_skill_level(monkeypatch):
 
 def test_edit_profile_refuses_to_finish_with_no_required_skills(monkeypatch):
     profile = Profile(required_skills=(RequiredSkill("Artillery", min_level=1),))
-    _scripted_input(monkeypatch, [
-        "2", "1",             # remove the only required skill
-        "0",                   # try to finish -- must be refused (no required skills left)
-        "1", "Burst", "1",     # so add one back, with minimum level 1
-        "0",                    # now finishing is allowed
+    _scripted_calls(monkeypatch, [
+        ("pick", "remove_required"), ("pick_index", 0),  # remove the only required skill
+        ("pick", "done"),  # refused -- no required skills left, loops back
+        ("pick", "add_required"), ("ask_text_with_completion", "Burst"), ("ask_int", 1),
+        ("pick", "done"),  # now allowed
     ])
     result = goal_wizard._edit_profile(profile)
     assert result.required_skills == (RequiredSkill("Burst", min_level=1),)
+
+
+def test_run_wizard_end_to_end_writes_yaml(monkeypatch):
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr(goal_wizard, "GOALS_DIR", Path(d))
+        _scripted_calls(monkeypatch, [
+            ("ask_text", "Test Goal"),                  # name
+            ("pick", "skills_plus"),                     # augment type
+            ("ask_text_with_completion", ""),             # protected skills -- none
+            ("ask_text", ""),                              # profile 1 label -- blank
+            ("ask_text_with_completion", "Artillery"),      # required skill 1
+            ("ask_text_with_completion", ""),                # required skills done
+            ("ask_int", 1),                                   # min level for Artillery
+            ("ask_text_with_completion", ""),                  # allowed additional -- none
+            ("ask_yes_no", False),                              # add another profile? no
+        ])
+        out_path = goal_wizard.run_wizard()
+        goal = load_goal(out_path)
+        assert goal.name == "Test Goal"
+        assert goal.augment_type == "skills_plus"
+        assert goal.profiles[0].required_skills == (RequiredSkill("Artillery", min_level=1),)
 
 
 def test_run_editor_end_to_end_saves_correctly(monkeypatch):
@@ -80,12 +120,14 @@ def test_run_editor_end_to_end_saves_correctly(monkeypatch):
         profiles=(Profile(required_skills=(RequiredSkill("Artillery", min_level=1),)),),
         protected_skills=frozenset(),
     )
-    _scripted_input(monkeypatch, [
-        "1", "1", "Burst", "0",   # edit protected skills -> add Burst, done
-        "2", "1",                  # edit profile 1
-        "3", "1", "3",              # change required skill #1's min level to 3
-        "0",                         # done editing this profile
-        "0",                          # save and exit
+    _scripted_calls(monkeypatch, [
+        ("pick", "edit_protected"),
+        ("pick", "add"), ("ask_text_with_completion", "Burst"),
+        ("pick", "done"),
+        ("pick", "edit_profile"), ("pick_index", 0),  # only one profile
+        ("pick", "change_level"), ("pick_index", 0), ("ask_int", 3),
+        ("pick", "done"),  # done editing this profile
+        ("pick", "save"),  # save and exit
     ])
     with tempfile.TemporaryDirectory() as d:
         path = Path(d) / "test-goal.yaml"
