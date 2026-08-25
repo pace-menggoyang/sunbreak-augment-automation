@@ -396,9 +396,20 @@ _MENU_ITEMS: list[tuple[str, str]] = [
     ("exit", "Exit"),
 ]
 
+# Generated once via `pyfiglet.figlet_format("QURIO", font="small")` and
+# hardcoded here -- not worth a runtime dependency for a static string.
+_BANNER = [
+    r"  ___  _   _ ___ ___ ___  ",
+    r" / _ \| | | | _ \_ _/ _ \ ",
+    r"| (_) | |_| |   /| | (_) |",
+    r" \__\_\\___/|_|_\___\___/ ",
+]
+
 _MENU_STYLE = Style.from_dict({
     "frame.border": "#00d7d7",
     "frame.label": "bold #00d7d7",
+    "banner": "bold #00d7d7",
+    "tagline": "#5f8787 italic",
     "status-good": "#00d787",
     "status-warn": "#ffaf00",
     "status-bad": "#ff5f5f",
@@ -423,7 +434,11 @@ def _build_arrow_menu_app(session: _SessionState) -> Application[str | None]:
     status = _status_fragments(session)
 
     def get_text():
-        fragments = list(status)
+        fragments = []
+        for line in _BANNER:
+            fragments.append(("class:banner", line + "\n"))
+        fragments.append(("class:tagline", "Augmentation Automation\n\n"))
+        fragments.extend(status)
         fragments.append(("", "\n"))
         for i, (_, label) in enumerate(_MENU_ITEMS):
             number = f"{i + 1}. " if i < 9 else "   "
@@ -551,75 +566,96 @@ def _interactive_menu() -> None:
             cmd, _, rest = raw.partition(" ")
             cmd, rest = cmd.lower(), rest.strip()
 
-        if cmd in ("0", "exit", "quit", "q"):
+        if not _dispatch_command(cmd, rest, session):
             return
-        elif cmd in ("1", "wizard", "goal"):
-            run_wizard()
-        elif cmd in ("2", "edit"):
-            goal_path = _select_goal_path()
-            if goal_path is None:
-                continue
-            try:
-                goal = load_goal(goal_path)
-            except GoalValidationError as e:
-                print(f"goal config problem in {goal_path}:\n{e}", file=sys.stderr)
-                continue
-            except OSError as e:
-                print(f"couldn't read {goal_path}: {e}", file=sys.stderr)
-                continue
-            run_editor(goal, Path(goal_path))
-        elif cmd in ("3", "calibrate"):
-            _run_with_window_recovery(lambda: calibrate.main(_resolve_window_hint(session)), session)
-        elif cmd in ("4", "dry-run", "5", "farm"):
-            is_farm = cmd in ("5", "farm")
-            goal_path = _select_goal_path(default=session.last_goal_path)
-            if goal_path is None:
-                continue
-            try:
-                goal = load_goal(goal_path)
-            except GoalValidationError as e:
-                print(f"goal config problem in {goal_path}:\n{e}", file=sys.stderr)
-                continue
-            except OSError as e:
-                print(f"couldn't read {goal_path}: {e}", file=sys.stderr)
-                continue
-            session.last_goal_path = goal_path
-            max_attempts = state_machine.MAX_ATTEMPTS_DEFAULT
-            if is_farm:
-                max_attempts = _prompt_max_attempts(state_machine.MAX_ATTEMPTS_DEFAULT)
-            common_kwargs = dict(
-                window_title_hint=_resolve_window_hint(session),
-                region_config=session.region_config,
-                press_hold=PRESS_HOLD,
-                post_press_delay=POST_PRESS_DELAY,
-                settle_delay=state_machine.RESULT_SETTLE_DELAY,
-            )
-            _run_with_window_recovery(
-                lambda: _run_with_hotkeys(
-                    goal, dry_run=not is_farm, max_attempts=max_attempts,
-                    common_kwargs=common_kwargs,
-                    start_hotkey=DEFAULT_START_HOTKEY, stop_hotkey=DEFAULT_STOP_HOTKEY,
-                ),
-                session,
-            )
-        elif cmd in ("6", "selfcheck"):
-            _run_selfcheck()
-        elif cmd in ("7", "windows"):
-            _list_windows()
-        elif cmd in ("8", "package-failure", "bug-report"):
-            _run_package_failure()
-        elif cmd == "window":
-            if not rest:
-                print(f"current window hint: {_resolve_window_hint(session)!r}")
-            else:
-                session.window_hint = rest
-                print(f"window hint set to {rest!r} for this session")
-        elif cmd == "status":
-            _print_status(session)
-        elif cmd in ("help", "?"):
-            _print_help()
+        if use_arrow_menu:
+            # Otherwise the next redraw's full-screen alternate buffer
+            # covers up whatever this command just printed -- a farm
+            # run's live progress readout, a force-stop/give-up result, a
+            # goal validation error -- before there's been any chance to
+            # read it. Not needed in the typed-REPL fallback, which never
+            # takes over the screen in the first place.
+            input("\nPress Enter to return to the menu...")
+
+
+def _dispatch_command(cmd: str, rest: str, session: _SessionState) -> bool:
+    """Runs one command. Returns False if the REPL should exit (the user
+    picked exit/quit), True otherwise -- including every early-cancel
+    path (goal picking cancelled, a goal file failed to load), so
+    _interactive_menu's caller can uniformly pause afterward regardless
+    of which branch actually ran.
+    """
+    if cmd in ("0", "exit", "quit", "q"):
+        return False
+    elif cmd in ("1", "wizard", "goal"):
+        run_wizard()
+    elif cmd in ("2", "edit"):
+        goal_path = _select_goal_path()
+        if goal_path is None:
+            return True
+        try:
+            goal = load_goal(goal_path)
+        except GoalValidationError as e:
+            print(f"goal config problem in {goal_path}:\n{e}", file=sys.stderr)
+            return True
+        except OSError as e:
+            print(f"couldn't read {goal_path}: {e}", file=sys.stderr)
+            return True
+        run_editor(goal, Path(goal_path))
+    elif cmd in ("3", "calibrate"):
+        _run_with_window_recovery(lambda: calibrate.main(_resolve_window_hint(session)), session)
+    elif cmd in ("4", "dry-run", "5", "farm"):
+        is_farm = cmd in ("5", "farm")
+        goal_path = _select_goal_path(default=session.last_goal_path)
+        if goal_path is None:
+            return True
+        try:
+            goal = load_goal(goal_path)
+        except GoalValidationError as e:
+            print(f"goal config problem in {goal_path}:\n{e}", file=sys.stderr)
+            return True
+        except OSError as e:
+            print(f"couldn't read {goal_path}: {e}", file=sys.stderr)
+            return True
+        session.last_goal_path = goal_path
+        max_attempts = state_machine.MAX_ATTEMPTS_DEFAULT
+        if is_farm:
+            max_attempts = _prompt_max_attempts(state_machine.MAX_ATTEMPTS_DEFAULT)
+        common_kwargs = dict(
+            window_title_hint=_resolve_window_hint(session),
+            region_config=session.region_config,
+            press_hold=PRESS_HOLD,
+            post_press_delay=POST_PRESS_DELAY,
+            settle_delay=state_machine.RESULT_SETTLE_DELAY,
+        )
+        _run_with_window_recovery(
+            lambda: _run_with_hotkeys(
+                goal, dry_run=not is_farm, max_attempts=max_attempts,
+                common_kwargs=common_kwargs,
+                start_hotkey=DEFAULT_START_HOTKEY, stop_hotkey=DEFAULT_STOP_HOTKEY,
+            ),
+            session,
+        )
+    elif cmd in ("6", "selfcheck"):
+        _run_selfcheck()
+    elif cmd in ("7", "windows"):
+        _list_windows()
+    elif cmd in ("8", "package-failure", "bug-report"):
+        _run_package_failure()
+    elif cmd == "window":
+        if not rest:
+            print(f"current window hint: {_resolve_window_hint(session)!r}")
         else:
-            print(f"{raw!r} isn't a recognized command -- type 'help' to see the list.")
+            session.window_hint = rest
+            print(f"window hint set to {rest!r} for this session")
+    elif cmd == "status":
+        _print_status(session)
+    elif cmd in ("help", "?"):
+        _print_help()
+    else:
+        shown = f"{cmd} {rest}".strip() if rest else cmd
+        print(f"{shown!r} isn't a recognized command -- type 'help' to see the list.")
+    return True
 
 
 def main() -> None:

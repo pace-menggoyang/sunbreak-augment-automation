@@ -6,6 +6,17 @@ project doesn't yet follow strict semantic versioning (it's still beta).
 
 ## [Unreleased]
 
+- Fix: a command's output (a farm run's live progress, a force-stop/
+  give-up result, a goal validation error) getting silently covered up
+  the instant the arrow-key menu redrew, before there was any chance to
+  read it -- the full-screen menu uses the terminal's alternate screen
+  buffer, which hides whatever was just printed to the regular one.
+  Every command now pauses on "Press Enter to return to the menu..."
+  before redrawing (only in arrow-key mode -- the typed-command fallback
+  never took over the screen in the first place, so it's unaffected).
+- Feature: the arrow-key menu now opens with a big "QURIO" text banner
+  above the status/command list, matching the same cyan accent as the
+  rest of the box, instead of just the plain title text.
 - Feature: the interactive menu now shows a full-screen, colored
   arrow-key/number-key menu by default instead of requiring 'help' first
   -- Up/Down (or a digit) to move, Enter to run immediately, live
