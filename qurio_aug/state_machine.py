@@ -181,13 +181,17 @@ def _detect_page_indicator(
 def _confidence_tags(row: ocr.ParsedRow) -> str:
     """"how", not just "what": which of _ocr_single_digit's three methods
     actually produced the digit (template match / a specific tesseract psm
-    / last-resort sparkle recovery), and whether a merged run needed
-    debridging first. Blank/removed rows never read a digit at all, so
-    both are empty/"none" there and this returns "". Surfaced so the next
-    live-failure investigation doesn't have to be reverse-engineered from
-    a screenshot the way several earlier ones were -- see docs/roadmap.md.
+    / last-resort sparkle recovery), whether a merged run needed
+    debridging first, and whether the value text (sign, or "None") came
+    from the fast color+structure classifier or a Tesseract fallback (see
+    ocr._classify_value_fast). Blank rows never read a digit or a value
+    at all, so this returns "" there. Surfaced so the next live-failure
+    investigation doesn't have to be reverse-engineered from a screenshot
+    the way several earlier ones were -- see docs/roadmap.md.
     """
     tags = []
+    if row.value_source:
+        tags.append(f"value:{row.value_source}")
     if row.digit_source:
         tags.append(row.digit_source)
     if row.debridge != "none":

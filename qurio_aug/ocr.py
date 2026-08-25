@@ -587,6 +587,7 @@ class RawRow:
     value_blank: bool
     digit_source: str = ""  # "template" | "tesseract:psmN" | "sparkle-recovery" | "" (no digit attempted)
     debridge: str = "none"  # "none" | "color" | "brightness" -- see read_row
+    value_source: str = ""  # "color" | "tesseract" | "" (blank slot) -- see _classify_value_fast
 
 
 def select_digit_run(
@@ -735,12 +736,117 @@ def _attempt_color_debridge(
     return candidate if candidate[1] - candidate[0] <= MAX_DIGIT_RUN_WIDTH else None
 
 
+# --- Fast value-text classification: color + run-structure instead of a
+# Tesseract call, per docs/ocr-performance-research.md #3. The delta's
+# rendered color already encodes gain (green) vs. gain-at-max-level
+# (orange/gold) vs. loss-or-fully-removed (red) -- and since a *gain* can
+# never be "None" (a fully-removed skill is a loss by definition), color
+# alone is enough to know the sign whenever it's confidently green or
+# orange, skipping the tesseract call on "Lv +/-" entirely and going
+# straight to the (already fast, template-match-first) digit read. Red is
+# the one ambiguous bucket -- a numeric loss and "None" render in the
+# identical color -- resolved there by run *structure* instead: "None"
+# renders as ~4 similarly narrow letter-runs with no "Lv" prefix, while a
+# numeric value's first run is "Lv" itself, measured distinctly wider.
+#
+# Thresholds below were validated against every real row in
+# tests/fixtures/three_rows_reference.png (not guessed): a normal gain
+# (~108, 164, 76), a gain at max skill level (~193, 143, 48 -- the same
+# "Diversion" row docs/ocr-performance-research.md #3 found live), and a
+# real "None" removal (~187, 72, 67, first run 24px wide) against two
+# real numeric first-run widths (34px, 38px) -- all three color buckets
+# and both structural buckets landed clear of their dead zones, not on a
+# boundary.
+
+_VALUE_COLOR_MARGIN = 30  # same proven margin as _GREEN_DOMINANCE_MARGIN
+# Real G-B gaps measured: ~95-119 for a maxed-level gain, ~5-6 for a loss/
+# None -- these two bounds sit with wide margin on both sides of that gap,
+# so anything landing between them (a gap this codebase hasn't seen a real
+# sample of yet) falls back to Tesseract rather than guessing.
+_MAXED_GAIN_GB_GAP_MIN = 70
+_LOSS_GB_GAP_MAX = 30
+# Real first-run widths measured: "None"'s first letter at 24px, "Lv"'s
+# prefix at 34-38px for a real numeric value -- margin on both sides of
+# that gap for the same reason as above.
+_NONE_FIRST_RUN_MAX_WIDTH = 26
+_NUMERIC_FIRST_RUN_MIN_WIDTH = 30
+
+
+def _avg_bright_color(img: Image.Image, bbox: tuple[int, int, int, int]) -> tuple[float, float, float] | None:
+    """Average RGB of "content" pixels (same brightness test _bright_bbox
+    itself uses) within bbox -- None if somehow nothing qualifies (bbox
+    was computed from this same image, so this is only a defensive case).
+    """
+    crop = img.crop(bbox).convert("RGB")
+    px = crop.load()
+    w, h = crop.size
+    r_sum = g_sum = b_sum = count = 0
+    for y in range(h):
+        for x in range(w):
+            r, g, b = px[x, y]
+            if max(r, g, b) > BRIGHT_THRESHOLD:
+                r_sum += r
+                g_sum += g
+                b_sum += b
+                count += 1
+    if count == 0:
+        return None
+    return r_sum / count, g_sum / count, b_sum / count
+
+
+def _classify_value_fast(value_crop: Image.Image, bbox: tuple[int, int, int, int]) -> tuple[str, str] | None:
+    """Attempts to determine the value cell's text -- "Lv +", "Lv -", or
+    "None" is all parse_value ever actually looks for -- via color +
+    structure alone. Returns (synthetic_text, "color") on a confident
+    read, matching exactly the substrings parse_value checks for so
+    nothing downstream needs to change; returns None on anything short of
+    confident, so the caller falls back to the real Tesseract read
+    unchanged. See the module comment above this function for the
+    thresholds' justification.
+    """
+    avg = _avg_bright_color(value_crop, bbox)
+    if avg is None:
+        return None
+    r, g, b = avg
+
+    if g > r + _VALUE_COLOR_MARGIN and g > b + _VALUE_COLOR_MARGIN:
+        return "Lv +", "color"  # a gain is never "None" -- no structural check needed
+
+    if r > g + _VALUE_COLOR_MARGIN:
+        gap = g - b
+        if gap > _MAXED_GAIN_GB_GAP_MIN:
+            return "Lv +", "color"  # gain at max skill level -- still a gain, never "None"
+        if gap < _LOSS_GB_GAP_MAX:
+            runs = _column_runs(value_crop, bbox)
+            if not runs:
+                return None
+            first_width = runs[0][1] - runs[0][0]
+            if first_width <= _NONE_FIRST_RUN_MAX_WIDTH:
+                return "None", "color"
+            if first_width >= _NUMERIC_FIRST_RUN_MIN_WIDTH:
+                return "Lv -", "color"
+    return None  # color or structure landed in a dead zone -- fall back to Tesseract
+
+
 def read_row(screenshot: Image.Image, row: RowRegions) -> RawRow:
     name_crop = _crop_fraction(screenshot, row.name_box)
     value_crop = _crop_fraction(screenshot, row.value_box)
 
     name_text, _ = _ocr_content(name_crop, _NAME_CONFIG)
-    value_text, value_bbox = _ocr_content(value_crop, _VALUE_TEXT_CONFIG)
+
+    value_bbox = _bright_bbox(value_crop)
+    value_source = ""
+    if value_bbox is None:
+        value_text = ""
+    else:
+        fast = _classify_value_fast(value_crop, value_bbox)
+        if fast is not None:
+            value_text, value_source = fast
+        else:
+            padded = _pad_bbox(value_bbox, value_crop)
+            content = value_crop.crop(padded)
+            value_text = _run_tesseract(_upscale(content, UPSCALE), _VALUE_TEXT_CONFIG)
+            value_source = "tesseract"
 
     digit_text = ""
     digit_source = ""
@@ -791,6 +897,7 @@ def read_row(screenshot: Image.Image, row: RowRegions) -> RawRow:
         value_blank=value_bbox is None,
         digit_source=digit_source,
         debridge=debridge,
+        value_source=value_source,
     )
 
 
@@ -820,6 +927,7 @@ class ParsedRow:
     # decision logic. "" / "none" when no digit was read (blank/removed row).
     digit_source: str = ""
     debridge: str = "none"
+    value_source: str = ""
 
 
 def parse_row(raw: RawRow) -> ParsedRow:
@@ -841,11 +949,13 @@ def parse_row(raw: RawRow) -> ParsedRow:
 
     if skill is None or (not removed and delta is None):
         return ParsedRow(skill=None, blank=False, unparseable=True,
-                          digit_source=raw.digit_source, debridge=raw.debridge)
+                          digit_source=raw.digit_source, debridge=raw.debridge,
+                          value_source=raw.value_source)
 
     result = SkillResult(name=skill.name, delta=delta or 0, removed=removed)
     return ParsedRow(skill=result, blank=False, unparseable=False,
-                      digit_source=raw.digit_source, debridge=raw.debridge)
+                      digit_source=raw.digit_source, debridge=raw.debridge,
+                      value_source=raw.value_source)
 
 
 # Lazily created, reused for every read_page call rather than one

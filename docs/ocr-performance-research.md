@@ -187,7 +187,7 @@ template being misclassified as contaminated can't happen here. Verified
 end-to-end against all 5 real captures; see the project changelog and
 `qurio_aug/ocr.py` for details.
 
-## 3. Replace value-text OCR with color + structure (most promising)
+## 3. Replace value-text OCR with color + structure -- SHIPPED
 
 While investigating #2, found a better opportunity than originally scoped
 (previously floated as "template-match the fixed Lv/+/-/None vocabulary").
@@ -228,6 +228,28 @@ and `is_augmentation_results_screen`), and only one real orange sample
 observed so far -- worth staying open to more color variety once this is
 actually built and exercised against live data, but the separation is
 wide enough to be a reasonable base to design against.
+
+**Shipped** (`_classify_value_fast` in `qurio_aug/ocr.py`): thresholds
+validated against every real row in `tests/fixtures/three_rows_reference.png`
+-- a normal gain, the same real maxed-out "Diversion" gain this research
+found live, and a real "None" removal -- plus 7 synthetic boundary tests
+pinning down each dead zone precisely (`tests/test_ocr.py`). "None" vs. a
+numeric loss ended up resolved by the *first* column-run's width, not run
+count as originally floated here: a real "None" fixture's own *last* run
+measured 18px, under the 20px `MAX_DIGIT_RUN_WIDTH` a naive reuse would
+have checked, which would have misclassified it as numeric. The first
+run's width (~34-38px "Lv" prefix vs. ~24px "None"'s first letter)
+separates cleanly instead, with margin confirmed on both sides.
+
+Falls back to the original Tesseract read whenever color or structure
+lands in a dead zone (measured live: one of four sparkle-contaminated
+fixtures does, correctly). Measured on the real, already-threaded
+`ocr.read_page()` production path: **1.47x faster** with `tesserocr`
+active (Windows default), **1.76x faster** on the pure
+pytesseract-subprocess path (macOS, or `tesserocr` unavailable) -- the
+win is larger without `tesserocr` since the avoided call cost more to
+begin with. All 155 tests pass, zero changes needed to any pre-existing
+test.
 
 ## 4. Batch multiple Tesseract calls into one subprocess invocation
 

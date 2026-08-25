@@ -115,21 +115,7 @@ worth prioritizing over the above.
    necessary if a higher delta is ever actually observed live --
    reactive work, not proactive.
 
-6. **Replace value-text OCR with color + structure analysis.** From
-   `docs/ocr-performance-research.md` #3: the delta's color already
-   encodes gain (green) vs. gain-at-max-level (orange) vs. loss/None
-   (red), and "None" vs. a numeric loss is distinguishable by run
-   structure, without needing OCR at all for the common case. Real,
-   measured color separation, no new dependency, and the same
-   green-channel-dominance technique already shipped for sparkle
-   recovery (see `_is_green_digit_pixel`) extends naturally here.
-   Tesseract call batching (the item that had displaced this in
-   priority) turned out to be a measured regression on real hardware and
-   was reverted -- see `docs/ocr-performance-research.md` #4c -- so this
-   is back to being the most promising remaining OCR speed idea, not a
-   fallback.
-
-7. **Self-calibrating OCR thresholds.** `BRIGHT_THRESHOLD`,
+6. **Self-calibrating OCR thresholds.** `BRIGHT_THRESHOLD`,
    `MIN_MATCH_SCORE`, `INDICATOR_AMBIGUOUS_WIDTH_FRACTION`, and similar
    constants are all tuned against captures from one machine's display.
    A future monitor with different gamma/brightness could need
@@ -137,13 +123,13 @@ worth prioritizing over the above.
    cross-machine -- worth revisiting only if a beta tester's failures
    look threshold-related.
 
-8. **A visible progress readout during a long run** (attempt N/max,
+7. **A visible progress readout during a long run** (attempt N/max,
    rough rate, elapsed time) instead of scrolling per-attempt text.
 
-9. **A sound or system notification on accept**, so a long unattended
+8. **A sound or system notification on accept**, so a long unattended
    run doesn't require watching the terminal to notice it finished.
 
-10. **Code signing.** Removes the Gatekeeper/SmartScreen warnings
-    entirely. Costs real money (~$100-400/yr depending on platform) and
-    isn't a code change -- a project/budget decision, not engineering
-    work.
+9. **Code signing.** Removes the Gatekeeper/SmartScreen warnings
+   entirely. Costs real money (~$100-400/yr depending on platform) and
+   isn't a code change -- a project/budget decision, not engineering
+   work.

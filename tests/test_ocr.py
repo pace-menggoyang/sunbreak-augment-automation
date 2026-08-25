@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from qurio_aug import ocr
 from qurio_aug.ocr import RawRow, parse_row, select_digit_run
@@ -247,6 +247,108 @@ def test_is_green_digit_pixel_separates_green_stroke_from_sparkle():
     assert not ocr._is_green_digit_pixel(140, 140, 140)
 
 
+# --- _classify_value_fast: color+structure fast path for the value cell's
+# text, replacing a Tesseract call for the common case
+# (docs/ocr-performance-research.md #3). Thresholds themselves are
+# validated against every row of the real three_rows_reference.png fixture
+# (see test_clean_page_tags_value_source_color_for_all_rows below); these
+# use synthetic solid-color, known-width crops instead, since three real
+# rows can't exercise every branch's dead zone precisely. ---
+
+def _solid_bar_crop(x0: int, x1: int, color: tuple[int, int, int], width: int = 160, height: int = 40) -> Image.Image:
+    """Black canvas with one solid-color bar from x0 to x1 (inclusive),
+    spanning most of the height. Background stays under BRIGHT_THRESHOLD,
+    so _bright_bbox/_column_runs see exactly the bar and nothing else --
+    a run's width is exactly x1 - x0 + 1."""
+    img = Image.new("RGB", (width, height), (0, 0, 0))
+    ImageDraw.Draw(img).rectangle([x0, 5, x1, height - 5], fill=color)
+    return img
+
+
+def test_classify_value_fast_green_gain():
+    img = _solid_bar_crop(10, 49, (90, 200, 80))
+    bbox = ocr._bright_bbox(img)
+    assert ocr._classify_value_fast(img, bbox) == ("Lv +", "color")
+
+
+def test_classify_value_fast_maxed_gain_orange():
+    img = _solid_bar_crop(10, 49, (200, 150, 50))
+    bbox = ocr._bright_bbox(img)
+    assert ocr._classify_value_fast(img, bbox) == ("Lv +", "color")
+
+
+def test_classify_value_fast_numeric_loss_wide_first_run():
+    img = _solid_bar_crop(10, 45, (200, 90, 85))  # first run 36px -- "Lv"-prefix-like
+    bbox = ocr._bright_bbox(img)
+    assert ocr._classify_value_fast(img, bbox) == ("Lv -", "color")
+
+
+def test_classify_value_fast_none_narrow_first_run():
+    img = _solid_bar_crop(10, 29, (200, 90, 85))  # first run 20px -- lone-letter-like
+    bbox = ocr._bright_bbox(img)
+    assert ocr._classify_value_fast(img, bbox) == ("None", "color")
+
+
+def test_classify_value_fast_falls_back_when_color_ambiguous():
+    img = _solid_bar_crop(10, 49, (150, 150, 150))  # no channel dominant
+    bbox = ocr._bright_bbox(img)
+    assert ocr._classify_value_fast(img, bbox) is None
+
+
+def test_classify_value_fast_falls_back_in_gb_gap_dead_zone():
+    # r dominant (rules out green gain), but the G-B gap (40) sits
+    # strictly between _LOSS_GB_GAP_MAX (30) and _MAXED_GAIN_GB_GAP_MIN
+    # (70) -- a gap this codebase hasn't seen a real sample of, so it must
+    # fall back rather than guess.
+    img = _solid_bar_crop(10, 49, (200, 120, 80))
+    bbox = ocr._bright_bbox(img)
+    assert ocr._classify_value_fast(img, bbox) is None
+
+
+def test_classify_value_fast_falls_back_in_first_run_width_dead_zone():
+    # Red (loss-or-None range), but the first run (28px) sits strictly
+    # between _NONE_FIRST_RUN_MAX_WIDTH (26) and
+    # _NUMERIC_FIRST_RUN_MIN_WIDTH (30) -- ambiguous structure, must fall
+    # back rather than guess.
+    img = _solid_bar_crop(10, 37, (200, 90, 85))
+    bbox = ocr._bright_bbox(img)
+    assert ocr._classify_value_fast(img, bbox) is None
+
+
+def test_classify_value_fast_none_when_bbox_has_no_bright_pixels():
+    # Defensive case per _avg_bright_color's own docstring -- shouldn't
+    # happen in practice since callers always derive bbox from the same
+    # image, but must not crash if it ever does.
+    img = Image.new("RGB", (10, 10), (0, 0, 0))
+    assert ocr._classify_value_fast(img, (0, 0, 5, 5)) is None
+
+
+def test_read_row_value_source_for_sparkle_contaminated_gains():
+    # Real value: three of these four sparkle-contaminated fixtures (see
+    # the debridge tests above) are still dominant-green enough on average
+    # that the color fast path fires for the value-text sign too, skipping
+    # tesseract entirely. The fourth's sparkle pulls the average green
+    # margin under _VALUE_COLOR_MARGIN (measured: g-r ~= 27, just short of
+    # the needed 30) -- correctly falls back to tesseract instead of
+    # guessing.
+    row = ocr.RowRegions(name_box=(0, 0, 1, 1), value_box=(0, 0, 1, 1))
+    color_cases = [
+        "value_crop_bridged_sparkle_color_recoverable.png",
+        "value_crop_heavy_sparkle_recoverable.png",
+        "value_crop_sparkle_on_digit_recoverable.png",
+    ]
+    for name in color_cases:
+        img = Image.open(FIXTURES / name)
+        raw = ocr.read_row(img, row)
+        assert raw.value_text == "Lv +"
+        assert raw.value_source == "color"
+
+    img = Image.open(FIXTURES / "value_crop_sparkle_recoverable.png")
+    raw = ocr.read_row(img, row)
+    assert "none" not in raw.value_text.lower()
+    assert raw.value_source == "tesseract"
+
+
 # --- indicator_region_ambiguous: distinguishes a genuine (if
 # glow-corrupted) page indicator from a genuinely single-page roll, whose
 # indicator box can still pick up a narrow sliver of an adjacent row's
@@ -354,6 +456,19 @@ def test_clean_page_tags_template_digit_source():
     # that trips MAX_DIGIT_RUN_WIDTH) -- a real, previously-invisible
     # finding surfaced by this tagging, not a test bug.
     assert page[0].debridge == "color"
+
+
+def test_clean_page_tags_value_source_color_for_all_rows():
+    # All three rows -- a normal gain, a gain at max skill level, and a
+    # real "None" removal -- classify confidently via color+structure
+    # alone (see _classify_value_fast tests above), never falling back to
+    # the tesseract value-text read for this fixture.
+    # docs/ocr-performance-research.md #3.
+    img = Image.open(FIXTURES / "three_rows_reference.png")
+    page = ocr.read_page(img, _THREE_ROWS_CONFIG)
+    assert page[0].value_source == "color"
+    assert page[1].value_source == "color"
+    assert page[2].value_source == "color"
 
 
 # --- _run_tesseract: resilience to a transient pytesseract/tesseract

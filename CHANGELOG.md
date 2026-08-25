@@ -6,6 +6,23 @@ project doesn't yet follow strict semantic versioning (it's still beta).
 
 ## [Unreleased]
 
+- Perf: the value cell's "Lv +", "Lv -", or "None" text is now read via
+  color + structure pixel analysis instead of a Tesseract call, for the
+  common case -- the delta's rendered color already encodes gain (green)
+  vs. gain-at-max-level (orange) vs. loss-or-removed (red), and red's
+  remaining ambiguity ("None" vs. a numeric loss both render identically)
+  resolves via the first text run's width instead ("Lv" prefix vs.
+  "None"'s narrower first letter). Falls back to the original Tesseract
+  read whenever color or structure lands in a dead zone -- confirmed live
+  on one of four real sparkle-contaminated fixtures. Measured on the real
+  `ocr.read_page()` production path: **1.47x faster** with `tesserocr`
+  active (Windows default), **1.76x faster** on the pure
+  pytesseract-subprocess path (macOS, or wherever `tesserocr` isn't
+  available) -- the win is larger without `tesserocr` since the avoided
+  call cost more to begin with. See `docs/ocr-performance-research.md`
+  #3 for the full measurement writeup, including a real pitfall caught
+  before shipping: naively reusing an existing digit-run-width check
+  would have misclassified a real "None" removal as numeric.
 - Perf (Windows): the compiled `.exe` shrank from 149MB to 94.4MB (37%)
   by trimming the vendored Tesseract install to exactly what
   `tesseract.exe` needs to run, instead of copying Chocolatey's entire
