@@ -183,3 +183,19 @@ def test_color_primitives_wrap_text_in_ansi_codes():
         assert "hello" in result
         assert result != "hello"
         assert result.endswith(tui._RESET)
+
+
+# --- enable_windows_ansi_colors: classic conhost.exe (cmd.exe's default
+# host) doesn't interpret the ANSI codes above at all unless this is
+# called first -- confirmed live, they render as literal visible garbage
+# otherwise. Must never raise regardless of platform or failure mode. ---
+
+
+def test_enable_windows_ansi_colors_noop_on_non_windows(monkeypatch):
+    monkeypatch.setattr(tui.sys, "platform", "darwin")
+    tui.enable_windows_ansi_colors()
+
+
+def test_enable_windows_ansi_colors_does_not_raise_on_windows(monkeypatch):
+    monkeypatch.setattr(tui.sys, "platform", "win32")
+    tui.enable_windows_ansi_colors()

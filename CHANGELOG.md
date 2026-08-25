@@ -6,6 +6,17 @@ project doesn't yet follow strict semantic versioning (it's still beta).
 
 ## [Unreleased]
 
+- Fix: every one of `tui.py`'s colored prompts/messages (max-attempts,
+  the hotkey-wait screen, accept/stop/give-up outcomes, every wizard/
+  editor prompt) rendered as literal visible garbage instead of color on
+  classic `conhost.exe` (`cmd.exe`'s default console host -- confirmed
+  live from a real double-clicked exe; Windows Terminal was never
+  affected, it already turns this on itself). Windows 10+ needs
+  `ENABLE_VIRTUAL_TERMINAL_PROCESSING` explicitly turned on via
+  `SetConsoleMode` before it interprets ANSI escape codes at all --
+  `tui.enable_windows_ansi_colors()` does this once at startup now,
+  best-effort (silently does nothing if it fails for any reason, same as
+  before this existed -- never a crash risk).
 - Fix: the "waiting for the start hotkey" screen (shown before a
   dry-run/farm actually starts) was a dead end -- the only way out was
   quitting the whole app, since Ctrl+C during a blocking global-hotkey

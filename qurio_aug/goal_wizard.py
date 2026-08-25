@@ -379,4 +379,5 @@ def run_editor(goal: Goal, path: Path) -> None:
 
 
 if __name__ == "__main__":
+    tui.enable_windows_ansi_colors()  # normally main.py's job -- this is the standalone entry point
     run_wizard()

@@ -564,6 +564,7 @@ def main() -> None:
         # via a separate console API path CPython special-cases, so this
         # only affects the redirected/piped case where it was broken.
         sys.stdin.reconfigure(encoding="utf-8")
+        tui.enable_windows_ansi_colors()
     if len(sys.argv) == 1:
         configure_tesseract()
         try:

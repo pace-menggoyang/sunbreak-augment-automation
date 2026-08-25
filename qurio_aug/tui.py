@@ -17,11 +17,21 @@ Two genuinely different reliability tiers here, by design:
   raw ANSI escape codes directly, never prompt_toolkit's output layer --
   confirmed live that prompt_toolkit.print_formatted_text has the exact
   same console-detection failure as Application, which would defeat the
-  purpose of a "this always works" text prompt. Raw ANSI has no such
-  detection step: modern Windows terminals render it, anything that
-  doesn't just passes the bytes through unharmed.
+  purpose of a "this always works" text prompt. Raw ANSI doesn't crash
+  anywhere, but confirmed live it isn't cosmetically harmless everywhere
+  either: classic conhost.exe (cmd.exe's default host, not Windows
+  Terminal) doesn't interpret ANSI codes unless
+  ENABLE_VIRTUAL_TERMINAL_PROCESSING is turned on first -- without it,
+  every escape code prints as literal visible garbage (the ESC byte
+  renders as a left-arrow glyph in that console's default codepage)
+  instead of being interpreted as color. See enable_windows_ansi_colors,
+  called once at startup by every entry point that uses this module's
+  colors (main.py, and goal_wizard.py's own standalone `python -m`
+  invocation).
 """
 from __future__ import annotations
+
+import sys
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import Application
@@ -32,6 +42,36 @@ from prompt_toolkit.layout import Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame
+
+_ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+_STD_OUTPUT_HANDLE = -11
+
+
+def enable_windows_ansi_colors() -> None:
+    """Turns on ANSI escape code interpretation for the current console,
+    if needed -- classic conhost.exe (cmd.exe's default host; Windows
+    Terminal already enables this itself) otherwise prints every color
+    code this module emits as literal visible garbage instead of color,
+    confirmed live. No-op on non-Windows (prompt_toolkit's own full-screen
+    widgets handle their own coloring regardless; this is specifically
+    for this module's raw-ANSI text helpers). Best-effort: silently does
+    nothing if it fails for any reason (stdout isn't a real console, an
+    old Windows version, etc.) -- worst case is the same literal-garbage
+    look this exists to fix, not a crash.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(_STD_OUTPUT_HANDLE)
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return
+        kernel32.SetConsoleMode(handle, mode.value | _ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+    except Exception:
+        pass
+
 
 # Generated once via `pyfiglet.figlet_format("QURIO", font="small")` and
 # hardcoded here -- not worth a runtime dependency for a static string.
