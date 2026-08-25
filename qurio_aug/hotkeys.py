@@ -89,13 +89,27 @@ class HotkeyController:
     def __exit__(self, *exc_info) -> None:
         self._listener.stop()
 
-    def wait_for_start(self) -> None:
-        """Blocks until the start hotkey fires. Consumes the event, so a
-        second wait_for_start() call (e.g. before the next armor piece)
-        needs a fresh press.
+    def wait_for_start(self) -> bool:
+        """Blocks until either hotkey fires. Returns True if start fired
+        (proceed), False if stop fired first -- lets a caller offer
+        "press stop to cancel and go back" instead of the only way out
+        of this screen being to quit the whole app. Consumes whichever
+        event fired, so a later call needs a fresh press either way.
+
+        Polls in short steps rather than one long wait() -- same
+        reasoning as state_machine._interruptible_sleep: needed to even
+        notice the stop hotkey at all here (a single blocking wait() can
+        only ever see one event), and as a side effect makes a real
+        Ctrl-C on Windows more reliably responsive too, the same class of
+        issue that pattern already exists to work around elsewhere.
         """
-        self._start_event.wait()
-        self._start_event.clear()
+        while True:
+            if self._start_event.wait(timeout=0.05):
+                self._start_event.clear()
+                return True
+            if self._stop_event.is_set():
+                self._stop_event.clear()
+                return False
 
     def stop_requested(self) -> bool:
         return self._stop_event.is_set()

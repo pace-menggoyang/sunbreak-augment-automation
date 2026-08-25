@@ -6,6 +6,23 @@ project doesn't yet follow strict semantic versioning (it's still beta).
 
 ## [Unreleased]
 
+- Fix: the "waiting for the start hotkey" screen (shown before a
+  dry-run/farm actually starts) was a dead end -- the only way out was
+  quitting the whole app, since Ctrl+C during a blocking global-hotkey
+  wait isn't reliably interceptable the way it is inside a menu.
+  Pressing the stop hotkey *before* start now cancels back to the main
+  menu instead of running, reusing the hotkey that already force-stops a
+  run in progress rather than teaching a new gesture
+  (`HotkeyController.wait_for_start` now polls both hotkeys in short
+  steps instead of blocking on just the start event, which also makes a
+  real Ctrl+C here more reliably responsive on Windows as a side effect).
+  This couldn't become an arrow-key menu like everything else -- the
+  whole point is listening globally while focus is on the *game*, which
+  needs pynput's system-wide hotkeys, not prompt_toolkit's
+  terminal-focused key capture. Also styled this message and the
+  max-attempts prompt (previously the two remaining plain, uncolored
+  prompts) and the accept/stop/give-up outcome messages to match the
+  rest of the app's palette.
 - Feature: every menu in the app -- not just the top-level one -- is now
   the same arrow-key widget: picking a goal file, recovering from a
   window error, the whole wizard/editor (building a new goal, editing

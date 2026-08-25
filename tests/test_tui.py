@@ -151,6 +151,18 @@ def test_ask_int_non_numeric_falls_back_to_default(monkeypatch):
     assert tui.ask_int("Level", default=5) == 5
 
 
+def test_ask_int_below_min_value_falls_back_to_default(monkeypatch):
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "0")
+    assert tui.ask_int("Attempts", default=300, min_value=1) == 300
+
+
+def test_ask_int_min_value_does_not_reject_default_callers(monkeypatch):
+    # goal_wizard.py's calls (min_additional_skills etc.) never pass
+    # min_value -- 0 must stay a legitimate value there.
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "0")
+    assert tui.ask_int("Minimum additional", default=1) == 0
+
+
 def test_ask_text_with_completion_falls_back_to_plain_input_when_no_console(monkeypatch):
     def boom(**kw):
         raise Exception("simulated: no console")

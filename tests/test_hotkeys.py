@@ -54,6 +54,17 @@ def test_wait_for_start_consumes_the_event():
     assert not ctrl._start_event.is_set()  # cleared after consuming
 
 
+def test_wait_for_start_returns_false_when_stop_fires_first():
+    import threading
+    ctrl = _controller_without_listener()
+    ctrl._start_event = threading.Event()
+    ctrl._stop_event = threading.Event()
+
+    ctrl._stop_event.set()
+    assert ctrl.wait_for_start() is False
+    assert not ctrl._stop_event.is_set()  # consumed, same as a start-hotkey press
+
+
 def test_stop_requested_reflects_event_state():
     import threading
     ctrl = _controller_without_listener()

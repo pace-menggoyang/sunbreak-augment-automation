@@ -297,12 +297,16 @@ def ask_text_with_completion(prompt: str, words: list[str]) -> str:
         return ask_text(prompt)
 
 
-def ask_int(prompt: str, default: int) -> int:
+def ask_int(prompt: str, default: int, *, min_value: int | None = None) -> int:
     raw = ask_text(f"{prompt} (default {default}): ")
     if not raw:
         return default
     try:
-        return int(raw)
+        value = int(raw)
     except ValueError:
         print_error(f"  not a number, using default ({default})")
         return default
+    if min_value is not None and value < min_value:
+        print_error(f"  must be at least {min_value}, using default ({default})")
+        return default
+    return value

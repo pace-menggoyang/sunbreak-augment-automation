@@ -179,13 +179,7 @@ def _prompt_max_attempts(default: int) -> int:
     (choice 3) ignores max_attempts entirely (see _execute), so it isn't
     asked there.
     """
-    raw = input(f"\nMax attempts before giving up (blank for default of {default}): ").strip()
-    if not raw:
-        return default
-    if raw.isdigit() and int(raw) > 0:
-        return int(raw)
-    print(f"{raw!r} isn't a positive number -- using default of {default}.")
-    return default
+    return tui.ask_int("Max attempts before giving up", default, min_value=1)
 
 
 def _countdown(seconds: float) -> None:
@@ -744,7 +738,7 @@ def _execute(goal, dry_run: bool, max_attempts: int, should_stop, **common_kwarg
                 goal, log=log, should_stop=should_stop, **common_kwargs,
             )
         except state_machine.UnreadableRollError as e:
-            print(f"UNREADABLE: {e}", file=sys.stderr)
+            print(tui.bad(f"UNREADABLE: {e}"), file=sys.stderr)
             print(f"Full step-by-step trace: {log._debug_path}", file=sys.stderr)
             return 2
         return 0 if decision.accepted else 1
@@ -754,18 +748,18 @@ def _execute(goal, dry_run: bool, max_attempts: int, should_stop, **common_kwarg
             goal, max_attempts=max_attempts, should_stop=should_stop, **common_kwargs,
         )
     except state_machine.UnreadableRollError as e:
-        print(f"UNREADABLE, stopping: {e}", file=sys.stderr)
+        print(tui.bad(f"UNREADABLE, stopping: {e}"), file=sys.stderr)
         print(f"Full step-by-step trace: logs/{goal.name}-*.debug.log (most recent)", file=sys.stderr)
         return 2
 
     if result.accepted:
-        print(f"\nAccepted after {result.attempts} attempt(s).")
+        print(tui.good(f"\nAccepted after {result.attempts} attempt(s)."))
         return 0
     elif result.stopped:
-        print(f"\nStopped after {result.attempts} attempt(s).")
+        print(tui.warn(f"\nStopped after {result.attempts} attempt(s)."))
         return 130  # conventional exit code for a user-initiated interrupt
     else:
-        print(f"\nGave up after {result.attempts} attempts without a match.")
+        print(tui.warn(f"\nGave up after {result.attempts} attempts without a match."))
         return 1
 
 
@@ -776,18 +770,27 @@ def _run_with_hotkeys(
     """Waits for the start hotkey, then runs -- shared by main()'s
     default (hotkey-driven) CLI path and the interactive menu, so both
     get the same "position the game, then press to start" UX.
+
+    Pressing the stop hotkey *before* start cancels back to the caller
+    instead of running (see HotkeyController.wait_for_start) -- this
+    screen used to be a dead end you could only leave by quitting the
+    whole app, since it isn't an arrow-key menu (the whole point is
+    listening globally while focus is on the *game*, which prompt_toolkit
+    can't do -- only pynput's system-wide hotkeys can).
     """
     with HotkeyController(start_hotkey, stop_hotkey) as hotkeys:
         mode = "dry-run evaluation" if dry_run else "autonomous loop"
         start_display = _format_hotkey(start_hotkey)
         stop_display = _format_hotkey(stop_hotkey)
-        print(
-            f"Ready for {mode}. Get the game positioned, then press "
-            f"{start_display} to start"
-            + ("" if dry_run else f" ({stop_display} force-stops at any time)")
-            + "."
-        )
-        hotkeys.wait_for_start()
+        cancel_hint = f"{stop_display} cancels" if dry_run else \
+            f"{stop_display} cancels before starting, force-stops once running"
+        print(tui.accent(
+            f"Ready for {mode}. Get the game positioned, then press {start_display} "
+            f"to start ({cancel_hint})."
+        ))
+        if not hotkeys.wait_for_start():
+            print(tui.warn("Cancelled before starting."))
+            return 130
         return _execute(goal, dry_run, max_attempts, hotkeys.stop_requested, **common_kwargs)
 
 

@@ -80,6 +80,54 @@ def test_execute_full_run_unreadable_returns_2(monkeypatch):
     assert main._execute(_goal(), dry_run=False, max_attempts=10, should_stop=lambda: False) == 2
 
 
+# --- _run_with_hotkeys: pressing the stop hotkey *before* start cancels
+# back to the caller (return 130, _execute never runs) instead of the
+# only way out being to quit the whole app -- previously untested (needs
+# a real HotkeyController otherwise, which starts a real pynput
+# listener). ---
+
+
+class _FakeHotkeys:
+    def __init__(self, start_result: bool):
+        self._start_result = start_result
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def wait_for_start(self) -> bool:
+        return self._start_result
+
+    def stop_requested(self) -> bool:
+        return False
+
+
+def test_run_with_hotkeys_cancels_before_start_without_executing(monkeypatch):
+    monkeypatch.setattr(main, "HotkeyController", lambda *a, **kw: _FakeHotkeys(start_result=False))
+
+    def boom(*a, **kw):
+        raise AssertionError("should not execute when cancelled before start")
+
+    monkeypatch.setattr(main, "_execute", boom)
+    result = main._run_with_hotkeys(
+        _goal(), dry_run=False, max_attempts=10, common_kwargs={},
+        start_hotkey="<alt>+m", stop_hotkey="<alt>+n",
+    )
+    assert result == 130
+
+
+def test_run_with_hotkeys_executes_when_start_fires(monkeypatch):
+    monkeypatch.setattr(main, "HotkeyController", lambda *a, **kw: _FakeHotkeys(start_result=True))
+    monkeypatch.setattr(main, "_execute", lambda *a, **kw: 0)
+    result = main._run_with_hotkeys(
+        _goal(), dry_run=False, max_attempts=10, common_kwargs={},
+        start_hotkey="<alt>+m", stop_hotkey="<alt>+n",
+    )
+    assert result == 0
+
+
 # --- _select_goal_path: number/path parsing, isolated from the real
 # project's configs/goals and goals directories via a temp dir. ---
 
