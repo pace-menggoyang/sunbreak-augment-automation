@@ -4,6 +4,26 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this
 project doesn't yet follow strict semantic versioning (it's still beta).
 
+## [Unreleased]
+
+- Perf (Windows): the compiled `.exe` shrank from 149MB to 94.4MB (37%)
+  by trimming the vendored Tesseract install to exactly what
+  `tesseract.exe` needs to run, instead of copying Chocolatey's entire
+  install directory. `packaging/trim_tesseract_windows.py` computes the
+  real dependency closure via a PE import-table walk (same idea as
+  `vendor_tesseract_macos.sh`'s `dylibbundler` step, just for PE instead
+  of Mach-O) -- previously not possible to verify without real Windows
+  hardware, which is exactly why the blind copy-everything approach was
+  chosen in the first place. Measured: of the ~229MB raw install, ~110MB
+  was dead weight -- a dozen model-training tools this project never
+  invokes (`text2image.exe`, `lstmtraining.exe`, `mftraining.exe`, etc.)
+  plus a large ICU/Pango/Cairo stack only *those* tools need, not OCR
+  itself. Verified after trimming: `tesseract.exe --version`, a real OCR
+  call through the trimmed subprocess path, and the full
+  debridge/sparkle-recovery pipeline against a real contaminated
+  fixture all still work correctly; the compiled exe's `--selfcheck`
+  passes with both the subprocess and `tesserocr` paths active.
+
 ## [0.1.4-beta] -- 2026-08-23
 
 First real Windows hardware + live game testing since v0.1.0-beta's
