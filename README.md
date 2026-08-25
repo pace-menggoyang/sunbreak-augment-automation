@@ -1,10 +1,55 @@
 # Sunbreak Qurio Augmentation Automation
 
-Reads the Qurio armor augmentation result screen in MH Rise: Sunbreak,
-decides whether a roll matches a configured target skill set, and either
-applies it or rerolls -- looping until it finds a match, since outcomes
-are seeded and rerolling is the only lever. Works on macOS (game via
-CrossOver) and Windows (native, borderless windowed mode).
+[![build](https://github.com/pace-menggoyang/sunbreak-augment-automation/actions/workflows/build.yml/badge.svg)](https://github.com/pace-menggoyang/sunbreak-augment-automation/actions/workflows/build.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
+
+Reads the Qurio armor augmentation result screen in **Monster Hunter Rise: Sunbreak**,
+decides whether a roll matches a goal you define, and either applies it or
+rerolls -- looping until it finds a match, since outcomes are seeded and
+rerolling is the only lever. No memory editing, no game files touched:
+it reads the screen and sends the same key presses you would.
+
+## Contents
+
+- [Features](#features)
+- [Quick Start (download and run)](#quick-start-download-and-run)
+- [Setup (from source / development)](#setup-from-source--development)
+- [Calibration](#calibration-do-this-first-against-the-live-game)
+- [Define a goal](#define-a-goal)
+- [Validate before trusting it unattended](#validate-before-trusting-it-unattended)
+- [Run it for real](#run-it-for-real)
+- [Known limitations](#known-limitations)
+- [Building the binary yourself](#building-the-binary-yourself)
+- [Project layout](#project-layout)
+
+## Features
+
+- **Reads the screen, decides, acts.** OCR (a fast pixel/template match
+  first, Tesseract as fallback -- in-process `tesserocr` on Windows when
+  available, ~3.76x faster) parses each skill row, checks it against your
+  goal, and sends the accept/reject/reroll keys -- no memory reading or
+  game files touched.
+- **Goals, not guesswork.** Define required skills, protected skills
+  (never lose these, no matter what else improves), and multiple
+  acceptance profiles (OR logic) -- either through an interactive wizard
+  or a plain YAML file.
+- **A colored, arrow-key interactive menu.** Launch it with no arguments
+  (or just double-click the exe) and get a full-screen menu with live
+  status (OCR engine, window, active goal) always visible -- Up/Down or a
+  number key to move, Enter to run. Every CLI flag is also reachable this
+  way; nothing requires command-line knowledge.
+- **Validate before you trust it.** `--dry-run` evaluates a roll and
+  prints its verdict without ever touching accept/reject/reroll, so you
+  can check the decision logic against real rolls first.
+- **Hotkey-driven, not focus-driven.** Position the game, then press a
+  global start hotkey when ready -- a separate stop hotkey force-stops a
+  run (or cancels before it even starts) without needing focus back on
+  the terminal.
+- **Cross-platform.** Native Windows, and macOS via CrossOver.
+- **Debug-log everything, bundle failures in one command.** Every attempt
+  is logged (human-readable + structured JSONL); `--package-failure`
+  zips up the relevant log and failure screenshots for a bug report.
 
 ## Quick Start (download and run)
 
@@ -27,30 +72,36 @@ No Python or command-line experience needed for this path.
      known false-positive pattern for PyInstaller-built executables, not
      a sign of anything malicious; check your antivirus's quarantine list
      if the exe seems to disappear after download.
-3. **Double-click `qurio-aug` to start it.** A window opens with a numbered
-   menu -- build a goal, calibrate, test a roll, start farming, or run
-   diagnostics. Follow the prompts; nothing there needs command-line
-   knowledge. Step through it roughly in this order the first time:
-   1. **Run diagnostics** -- confirms the OCR engine and window detection
-      are working before you touch the game.
-   2. **Build a new goal config** -- the wizard asks what skills to farm
-      for and what to protect, and writes the config for you. See "Define
-      a goal" below for the format if you'd rather hand-edit one, and
-      `configs/goals/*.yaml` for examples.
-   3. **Calibrate against your window** -- do this once, and again if you
-      resize the game window. See "Calibration" below for what to check
-      in its output.
-   4. **Test a goal against the current screen** -- validates your goal
-      against a few real rolls before trusting it unattended (see
-      "Validate before trusting it unattended" below).
-   5. **Start farming** -- runs the full autonomous loop.
+3. **Double-click `qurio-aug` to start it.** A colored menu opens showing
+   live status (OCR engine, window, active goal) above the command list
+   -- Up/Down or a number key to move, Enter to run; nothing needs
+   command-line knowledge. Step through it roughly in this order the
+   first time:
+   1. **Run diagnostics** (`selfcheck`) -- confirms the OCR engine and
+      window detection are working before you touch the game.
+   2. **Build a new goal config** (`wizard`) -- answers a few questions
+      about what skills to farm for and what to protect, and writes the
+      config for you. See [Define a goal](#define-a-goal) below for the
+      format if you'd rather hand-edit one, and `configs/goals/*.yaml`
+      for examples.
+   3. **Calibrate against your window** (`calibrate`) -- do this once,
+      and again if you resize the game window. See
+      [Calibration](#calibration-do-this-first-against-the-live-game)
+      below for what to check in its output.
+   4. **Test a goal against the current screen** (`dry-run`) -- validates
+      your goal against a few real rolls before trusting it unattended
+      (see
+      [Validate before trusting it unattended](#validate-before-trusting-it-unattended)
+      below).
+   5. **Start farming with a goal** (`farm`) -- runs the full autonomous
+      loop.
 
    (If you'd rather use command-line flags -- for scripting, or to tune
-   timing/hotkeys the menu doesn't expose -- every menu option is also a
+   timing/hotkeys the menu doesn't expose -- every menu command is also a
    flag; run `qurio-aug --help` from a terminal to see them all. The
    examples through the rest of this README use that flag form.)
 
-If something doesn't work, see **Known limitations** below and
+If something doesn't work, see [Known limitations](#known-limitations) and
 `docs/windows-beta-checklist.md` before reporting an issue -- most early
 Windows problems are one of the things listed there. When you do report
 one, the interactive menu's `package-failure` command (or `qurio-aug
@@ -60,7 +111,7 @@ through the folder by hand.
 
 ## Setup (from source / development)
 
-```
+```sh
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 brew install tesseract   # macOS. Windows: choco install tesseract, or the
@@ -76,7 +127,7 @@ process run as Administrator if the game itself is running elevated.
 
 Regenerate `data/*.json` if the datamined spreadsheet is ever updated to a
 newer game version:
-```
+```sh
 .venv/bin/python scripts/build_data_from_xlsx.py
 ```
 
@@ -90,7 +141,7 @@ auto-detected and trimmed before they're applied -- see
 in-game resolution can still shift things slightly. With the game sitting
 on an Augmentation Results screen (STATE 4):
 
-```
+```sh
 .venv/bin/python -m qurio_aug.calibrate
 ```
 (or `qurio-aug-calibrate` if you're running the compiled build)
@@ -121,7 +172,7 @@ sends the accept/reject/reroll macros (won't touch materials or change
 what's applied), but may send Q/E to page through a multi-page roll while
 reading it:
 
-```
+```sh
 qurio-aug --goal configs/goals/your-goal.yaml --dry-run
 ```
 
@@ -135,7 +186,7 @@ moving on.
 Get the game to STATE 1 (Material Select, correct armor piece + augment
 type already chosen), then:
 
-```
+```sh
 qurio-aug --goal configs/goals/your-goal.yaml
 ```
 
@@ -147,14 +198,19 @@ window with no time pressure, then press it when ready. The **stop hotkey**
 (**Control+N** / **Alt+N**) force-stops a running loop at any point (checked
 before every keypress and during every wait), without needing to switch
 focus back to the terminal -- switching focus mid-run to force a stop the
-old way could leave the game stuck mid-dialog. Pass `--start-hotkey`/
+old way could leave the game stuck mid-dialog. Pressed *before* the start
+hotkey, it cancels back out instead of running. Pass `--start-hotkey`/
 `--stop-hotkey` to remap either one, or `--no-hotkeys` to fall back to a
 fixed `--start-delay` countdown with no stop hotkey at all.
 
 It loops read -> decide -> accept/reroll autonomously until the goal is
 met, `--max-attempts` (default 300) is hit, or the stop hotkey is pressed,
 logging every attempt to `logs/<goal>-<timestamp>.log` (human-readable)
-and `.jsonl` (structured).
+and `.jsonl` (structured). A long run shows a live, in-place progress
+readout (attempt count, rough rate, elapsed time) rather than one line
+scrolling past per attempt; an accepted roll or a suspiciously large
+delta (a possible OCR misread, worth double-checking against the game)
+always prints its own line immediately.
 
 ### Tuning speed for long runs
 
@@ -174,24 +230,16 @@ a long (500+) run.
 
 ## Known limitations
 
-- **Windows: no window-occlusion protection.** macOS captures the game
-  window by its window ID, which still works correctly even if another
-  window is partially on top of it. The Windows capture backend grabs a
-  fixed screen region instead, so anything drawn on top during a run
-  (another window, an overlay, a notification toast) gets captured
-  instead of the game, with no error -- just wrong OCR input. Keep the
-  game window unobstructed and on top for the duration of a run.
-- **Windows: borderless windowed only.** Exclusive fullscreen isn't
-  supported -- the game needs to be in borderless windowed mode (the
-  common setup for exactly this reason: it's much easier for other tools
-  to interact with).
-- **16:9 only.** Ultrawide/21:9 in-game rendering isn't supported.
-- Both platforms: keep the game window at a stable size/position for the
-  duration of a run -- resizing or moving it mid-run isn't handled.
+| Platform | Limitation |
+|---|---|
+| Windows | **No window-occlusion protection.** The capture backend grabs a fixed screen region, so anything drawn on top during a run (another window, an overlay, a notification toast) gets captured instead of the game, with no error -- just wrong OCR input. Keep the game window unobstructed and on top for the duration of a run. macOS captures by window ID instead, which isn't affected. |
+| Windows | **Borderless windowed only.** Exclusive fullscreen isn't supported -- the game needs to be in borderless windowed mode (the common setup for exactly this reason: it's much easier for other tools to interact with). |
+| Both | **16:9 only.** Ultrawide/21:9 in-game rendering isn't supported. |
+| Both | Keep the game window at a stable size/position for the duration of a run -- resizing or moving it mid-run isn't handled. |
 
 ## Building the binary yourself
 
-```
+```sh
 pip install pyinstaller
 brew install dylibbundler   # macOS only
 ./packaging/vendor_tesseract_macos.sh     # macOS
@@ -221,6 +269,8 @@ and the vendoring scripts' comments for how that's wired up.
 - `qurio_aug/goal_config.py` -- goal YAML loading + eager skill-name validation
 - `qurio_aug/goal_wizard.py` -- interactive goal-config builder (`--wizard`)
   and editor for an existing one (interactive menu only, `edit` command)
+- `qurio_aug/tui.py` -- the shared arrow-key menu widget and colored
+  prompt/output helpers used everywhere in the interactive menu
 - `qurio_aug/input.py` -- keyboard macros for the confirmed UI flow
 - `qurio_aug/hotkeys.py` -- global start/force-stop hotkeys (Control+M/N on
   macOS, Alt+M/N on Windows)
