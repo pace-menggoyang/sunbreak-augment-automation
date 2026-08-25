@@ -6,6 +6,8 @@ project doesn't yet follow strict semantic versioning (it's still beta).
 
 ## [Unreleased]
 
+## [0.1.5-beta] -- 2026-08-25
+
 - Fix: every one of `tui.py`'s colored prompts/messages (max-attempts,
   the hotkey-wait screen, accept/stop/give-up outcomes, every wizard/
   editor prompt) rendered as literal visible garbage instead of color on
