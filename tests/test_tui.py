@@ -177,7 +177,7 @@ def test_ask_text_with_completion_falls_back_to_plain_input_when_no_console(monk
 # so these can never fail regardless of console availability. ---
 
 
-def test_color_primitives_wrap_text_in_ansi_codes():
+def test_color_primitives_wrap_text_in_ansi_codes(monkeypatch):
     for fn in (tui.accent, tui.dim, tui.good, tui.warn, tui.bad):
         result = fn("hello")
         assert "hello" in result
@@ -199,3 +199,37 @@ def test_enable_windows_ansi_colors_noop_on_non_windows(monkeypatch):
 def test_enable_windows_ansi_colors_does_not_raise_on_windows(monkeypatch):
     monkeypatch.setattr(tui.sys, "platform", "win32")
     tui.enable_windows_ansi_colors()
+
+
+def run_all():
+    class FakeMonkeypatch:
+        def __init__(self):
+            self._undo = []
+
+        def setattr(self, obj, name, value):
+            self._undo.append((obj, name, getattr(obj, name)))
+            setattr(obj, name, value)
+
+        def undo(self):
+            for obj, name, value in self._undo:
+                setattr(obj, name, value)
+
+    tests = [(k, v) for k, v in globals().items() if k.startswith("test_")]
+    failures = 0
+    for name, t in tests:
+        mp = FakeMonkeypatch()
+        try:
+            t(mp)
+            print(f"PASS {name}")
+        except AssertionError as e:
+            failures += 1
+            print(f"FAIL {name}: {e}")
+        finally:
+            mp.undo()
+    print(f"\n{len(tests) - failures}/{len(tests)} passed")
+    if failures:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    run_all()

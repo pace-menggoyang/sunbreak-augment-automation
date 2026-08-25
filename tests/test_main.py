@@ -254,12 +254,12 @@ def _window(owner="MonsterHunterRise.exe", title="Monster Hunter Rise", wid=1):
     return capture.WindowInfo(window_id=wid, owner_name=owner, title=title, bounds=(0, 0, 1920, 1080))
 
 
-def test_resolve_window_hint_falls_back_to_region_config():
+def test_resolve_window_hint_falls_back_to_region_config(monkeypatch):
     session = main._SessionState(region_config=_DUMMY_REGION_CONFIG)
     assert main._resolve_window_hint(session) == "Monster Hunter Rise"
 
 
-def test_resolve_window_hint_prefers_session_override():
+def test_resolve_window_hint_prefers_session_override(monkeypatch):
     session = main._SessionState(region_config=_DUMMY_REGION_CONFIG, window_hint="MonsterHunterRise.exe")
     assert main._resolve_window_hint(session) == "MonsterHunterRise.exe"
 
@@ -400,52 +400,53 @@ def test_calibrate_main_raises_on_ambiguous_match(monkeypatch):
 # real cmd.exe/PowerShell session -- this must degrade, not crash). ---
 
 
-def test_command_reader_falls_back_to_input_when_prompt_toolkit_fails(monkeypatch, tmp_path):
+def test_command_reader_falls_back_to_input_when_prompt_toolkit_fails(monkeypatch):
     def boom(**kw):
         raise Exception("simulated: no console")
 
     monkeypatch.setattr(main, "PromptSession", boom)
     monkeypatch.setattr(builtins, "input", lambda prompt="": "typed-command")
-    read = main._make_command_reader(main._build_completer(), tmp_path / "history")
-    assert read("qurio-aug> ") == "typed-command"
+    with tempfile.TemporaryDirectory() as d:
+        read = main._make_command_reader(main._build_completer(), Path(d) / "history")
+        assert read("qurio-aug> ") == "typed-command"
 
 
 # --- _classify_status_line / _status_fragments / _MENU_ITEMS: the
 # arrow-key menu's colored status panel and command list. ---
 
 
-def test_classify_status_line_tesseract_failed_is_bad():
+def test_classify_status_line_tesseract_failed_is_bad(monkeypatch):
     assert main._classify_status_line("tesseract: FAILED -- not installed") == "bad"
 
 
-def test_classify_status_line_tesseract_ok_is_good():
+def test_classify_status_line_tesseract_ok_is_good(monkeypatch):
     assert main._classify_status_line("tesseract: OK (version 5.4.0)") == "good"
 
 
-def test_classify_status_line_tesserocr_inactive_is_warn():
+def test_classify_status_line_tesserocr_inactive_is_warn(monkeypatch):
     assert main._classify_status_line("tesserocr accelerator: inactive (not installed)") == "warn"
 
 
-def test_classify_status_line_window_not_found_is_warn_not_bad():
+def test_classify_status_line_window_not_found_is_warn_not_bad(monkeypatch):
     # Common/expected (e.g. the game just isn't open yet), not an error
     # -- must not read as alarming as a real tesseract failure.
     assert main._classify_status_line("window: not found (looking for 'X')") == "warn"
 
 
-def test_classify_status_line_window_found_is_good():
+def test_classify_status_line_window_found_is_good(monkeypatch):
     assert main._classify_status_line("window: found (owner='X' title='Y')") == "good"
 
 
-def test_classify_status_line_ambiguous_window_is_warn():
+def test_classify_status_line_ambiguous_window_is_warn(monkeypatch):
     assert main._classify_status_line("window: 3 windows match 'X' -- ambiguous") == "warn"
 
 
-def test_classify_status_line_goal_is_neutral():
+def test_classify_status_line_goal_is_neutral(monkeypatch):
     assert main._classify_status_line("goal: none selected yet") == "neutral"
     assert main._classify_status_line("goal: configs/goals/example.yaml") == "neutral"
 
 
-def test_status_fragments_match_status_summary_lines():
+def test_status_fragments_match_status_summary_lines(monkeypatch):
     session = main._SessionState(region_config=_DUMMY_REGION_CONFIG)
     fragments = main._status_fragments(session)
     summary = main._status_summary(session)
@@ -455,7 +456,7 @@ def test_status_fragments_match_status_summary_lines():
         assert style_class.startswith("class:status-")
 
 
-def test_menu_items_ids_are_all_dispatchable_via_commands_table():
+def test_menu_items_ids_are_all_dispatchable_via_commands_table(monkeypatch):
     # Every arrow-menu item's id must be a name _interactive_menu's
     # dispatch (keyed off the same strings as _COMMANDS) already
     # recognizes -- guards against the two lists drifting apart.
