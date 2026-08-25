@@ -53,9 +53,10 @@ No Python or command-line experience needed for this path.
 If something doesn't work, see **Known limitations** below and
 `docs/windows-beta-checklist.md` before reporting an issue -- most early
 Windows problems are one of the things listed there. When you do report
-one, menu option 8 (or `qurio-aug --package-failure`) bundles the
-relevant debug log and saved failure screenshots from `logs/` into one
-zip to attach, instead of hunting through the folder by hand.
+one, the interactive menu's `package-failure` command (or `qurio-aug
+--package-failure`) bundles the relevant debug log and saved failure
+screenshots from `logs/` into one zip to attach, instead of hunting
+through the folder by hand.
 
 ## Setup (from source / development)
 
@@ -219,7 +220,7 @@ and the vendoring scripts' comments for how that's wired up.
 - `qurio_aug/decision.py` -- accept/reject rules (no I/O, unit-testable)
 - `qurio_aug/goal_config.py` -- goal YAML loading + eager skill-name validation
 - `qurio_aug/goal_wizard.py` -- interactive goal-config builder (`--wizard`)
-  and editor for an existing one (interactive menu only, option 2)
+  and editor for an existing one (interactive menu only, `edit` command)
 - `qurio_aug/input.py` -- keyboard macros for the confirmed UI flow
 - `qurio_aug/hotkeys.py` -- global start/force-stop hotkeys (Control+M/N on
   macOS, Alt+M/N on Windows)

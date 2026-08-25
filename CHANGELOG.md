@@ -6,6 +6,30 @@ project doesn't yet follow strict semantic versioning (it's still beta).
 
 ## [Unreleased]
 
+- Fix: the interactive menu crashing outright with a raw Python traceback
+  whenever the game window couldn't be found or matched more than one
+  window -- plausibly the single most common first-run failure, and
+  previously the least friendly possible way to hit it. The menu is now
+  a named-command REPL (prompt_toolkit: tab-completion + persistent
+  history, colored dynamic prompt showing the active goal; old numbered
+  options still work as aliases) with a `status` command and startup
+  block showing tesseract/window/goal state, and `calibrate`/`dry-run`/
+  `farm` now catch a window error and offer an interactive pick from the
+  visible-window list instead of crashing -- the picked window is
+  remembered for the rest of the session (`window <hint>` also sets it
+  manually). The scripted/argparse CLI path (`--goal ... --dry-run` etc.)
+  gets the same fix minus the interactive part: a clean one-line error
+  instead of a traceback. Also fixes a related bug found while building
+  this: `qurio_aug/calibrate.py`'s own window-not-found path called
+  `sys.exit()` directly, which would have silently killed the *entire*
+  interactive session (not just the `calibrate` command) the moment it
+  was wired up to run from inside it -- caught before shipping by
+  actually running the compiled exe's REPL end-to-end, not just the
+  source. Also fixed along the way: redirected/piped stdin on the
+  compiled exe (not the source checkout) decoded using the legacy
+  console codepage instead of UTF-8, mangling a leading BOM into
+  mis-decoded characters -- found the same way, by testing the real
+  compiled binary rather than assuming source behavior carries over.
 - Feature: a long run now shows a live, in-place progress readout
   (attempt N/max, rough attempts/min rate, elapsed time) instead of a
   full decision line scrolling past for every single attempt -- almost

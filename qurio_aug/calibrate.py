@@ -29,29 +29,37 @@ from qurio_aug.tesseract_setup import configure_tesseract
 LOG_DIR = Path("logs")
 
 
-def main() -> None:
+def main(title_hint: str | None = None) -> None:
+    """title_hint overrides both sys.argv and regions.yaml's own hint --
+    lets the interactive menu drive this with its session's window
+    override instead of needing to fake sys.argv. Standalone invocation
+    (`python -m qurio_aug.calibrate 'hint'`) is unchanged: title_hint is
+    only None here when nothing was passed programmatically, so it falls
+    through to sys.argv same as before.
+
+    Raises capture.WindowNotFoundError/AmbiguousWindowError on a bad hint
+    (via the same shared capture.find_game_window validation
+    state_machine.py uses) rather than printing and sys.exit()-ing itself
+    -- this used to do the latter, which was correct for standalone use
+    but would silently kill the whole interactive menu's process the
+    moment `calibrate` failed there instead of just returning to the
+    menu. See __main__ below for the standalone entry point's own
+    print-and-exit handling, and main.py's _run_with_window_recovery for
+    the interactive menu's.
+    """
     if sys.platform == "win32":
         # See main.py's main() for why: the console's legacy codepage can't
         # encode a lot of real-world window titles, and this prints them too.
         sys.stdout.reconfigure(errors="replace")
         sys.stderr.reconfigure(errors="replace")
     configure_tesseract()
-    title_hint = sys.argv[1] if len(sys.argv) > 1 else None
+    if title_hint is None and len(sys.argv) > 1:
+        title_hint = sys.argv[1]
     region_config = ocr.load_region_config()
     hint = title_hint or region_config.window_title_hint
 
     print(f"looking for a window matching {hint!r} ...")
-    matches = capture.find_windows(hint)
-    if not matches:
-        print(f"no window found. Pass a different hint, e.g.:\n"
-              f"  python -m qurio_aug.calibrate 'Monster Hunter'")
-        sys.exit(1)
-    if len(matches) > 1:
-        print(f"found {len(matches)} matches, using the first -- pass a more "
-              f"specific hint if this is wrong:")
-        for m in matches:
-            print(f"  - owner={m.owner_name!r} title={m.title!r} bounds={m.bounds}")
-    window = matches[0]
+    window = capture.find_game_window(hint)
     print(f"using: owner={window.owner_name!r} title={window.title!r} "
           f"bounds={window.bounds}")
 
@@ -106,4 +114,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (capture.WindowNotFoundError, capture.AmbiguousWindowError) as e:
+        print(f"{e}\nPass a different hint, e.g.:\n  python -m qurio_aug.calibrate 'Monster Hunter'",
+              file=sys.stderr)
+        sys.exit(1)

@@ -14,3 +14,4 @@ rapidfuzz>=3.0
 pynput>=1.7
 pyyaml>=6.0
 Pillow>=10.0
+prompt_toolkit>=3.0

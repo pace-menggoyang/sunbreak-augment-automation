@@ -71,6 +71,7 @@ of thing this check is for.)
 
 Paste the **full** traceback, not a summary or a screenshot of just the
 last line -- the actual error is almost always higher up. Include the
-exact command you ran. Also run `qurio-aug.exe --package-failure` (menu
-option 8) and attach the zip it produces -- bundles the relevant debug
-log and any saved failure screenshots from `logs/` for you.
+exact command you ran. Also run `qurio-aug.exe --package-failure` (or the
+interactive menu's `package-failure` command) and attach the zip it
+produces -- bundles the relevant debug log and any saved failure
+screenshots from `logs/` for you.

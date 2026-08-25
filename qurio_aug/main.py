@@ -32,7 +32,14 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.history import FileHistory
 
 from qurio_aug import calibrate, capture, ocr, state_machine
 from qurio_aug.goal_config import GoalValidationError, load_goal
@@ -79,19 +86,16 @@ def _format_hotkey(hotkey: str) -> str:
     return "+".join(display)
 
 
-def _run_selfcheck() -> None:
-    """Prints enough to diagnose "it doesn't work" from a single command's
-    output -- the thing to ask a beta tester to run and paste, especially
-    on a compiled build where there's no source to poke through.
+def _tesseract_status_lines() -> tuple[list[str], bool]:
+    """Returns (status lines, whether tesseract itself failed) -- shared
+    by --selfcheck and the REPL's `status` command so there's exactly
+    one place that knows how to ask.
     """
-    print(f"platform: {sys.platform}")
-    print(f"capture backend: {capture._backend.__name__}")
     try:
         version = selfcheck()
-        print(f"tesseract: OK (version {version})")
     except RuntimeError as e:
-        print(f"tesseract: FAILED -- {e}", file=sys.stderr)
-        sys.exit(1)
+        return [f"tesseract: FAILED -- {e}"], True
+    lines = [f"tesseract: OK (version {version})"]
     if sys.platform == "win32":
         # In-process OCR accelerator (~3.76x measured, see
         # docs/ocr-performance-research.md #1b) -- optional, so report
@@ -99,11 +103,26 @@ def _run_selfcheck() -> None:
         # seeing "inactive" here explains a slower-than-expected run
         # without it being an error to chase.
         if ocr.tesserocr is None:
-            print(f"tesserocr accelerator: inactive (not installed) [{ocr._tesserocr_import_error}]")
+            lines.append(f"tesserocr accelerator: inactive (not installed) [{ocr._tesserocr_import_error}]")
         elif ocr._get_tesserocr_api() is None:
-            print("tesserocr accelerator: inactive (tessdata not found)")
+            lines.append("tesserocr accelerator: inactive (tessdata not found)")
         else:
-            print("tesserocr accelerator: active")
+            lines.append("tesserocr accelerator: active")
+    return lines, False
+
+
+def _run_selfcheck() -> None:
+    """Prints enough to diagnose "it doesn't work" from a single command's
+    output -- the thing to ask a beta tester to run and paste, especially
+    on a compiled build where there's no source to poke through.
+    """
+    print(f"platform: {sys.platform}")
+    print(f"capture backend: {capture._backend.__name__}")
+    lines, failed = _tesseract_status_lines()
+    for line in lines:
+        print(line, file=sys.stderr if failed else sys.stdout)
+    if failed:
+        sys.exit(1)
     windows = capture.find_windows("")
     print(f"visible windows: {len(windows)} (run --list-windows to see them all)")
 
@@ -127,11 +146,16 @@ def _run_package_failure() -> None:
     print("attach this to a bug report on the project's GitHub Issues page.")
 
 
-def _select_goal_path() -> str | None:
+def _select_goal_path(default: str | None = None) -> str | None:
     """Lists goal YAMLs from _GOAL_SEARCH_DIRS and lets the user pick one
     by number, or type/paste a path themselves -- so the interactive menu
-    doesn't require already knowing (or typing out) a file path. Returns
-    None if the user backs out (blank input).
+    doesn't require already knowing (or typing out) a file path.
+
+    `default` (the REPL session's last-used goal, if any) is returned on
+    blank input instead of None -- lets repeat dry-run/farm invocations
+    just hit Enter to reuse the same goal rather than re-picking from the
+    list every time. Omitting it preserves the original "blank cancels"
+    behavior exactly (used by `edit`, which has no session goal to reuse).
     """
     candidates = [p for d in _GOAL_SEARCH_DIRS if d.is_dir() for p in sorted(d.glob("*.yaml"))]
     if candidates:
@@ -141,9 +165,11 @@ def _select_goal_path() -> str | None:
     else:
         print("\nNo goal configs found yet in configs/goals/ or goals/ -- "
               "build one first with the wizard (option 1).")
-    raw = input("\nPick a number, or paste a path to a goal YAML (blank to cancel): ").strip()
+    prompt = f"\nPick a number, or paste a path to a goal YAML (blank for {default}): " if default else \
+        "\nPick a number, or paste a path to a goal YAML (blank to cancel): "
+    raw = input(prompt).strip()
     if not raw:
-        return None
+        return default
     if raw.isdigit():
         idx = int(raw)
         if 1 <= idx <= len(candidates):
@@ -180,6 +206,145 @@ def _countdown(seconds: float) -> None:
     print()
 
 
+@dataclass
+class _SessionState:
+    """Holds what the REPL loop needs to remember between commands --
+    region_config is loaded once up front (cheap: just a parsed YAML),
+    window_hint is a per-session override set either explicitly (`window
+    <hint>`) or recovered from a WindowNotFoundError/AmbiguousWindowError
+    (see _recover_window_error), and last_goal_path lets repeat
+    dry-run/farm invocations reuse the same goal without re-picking it.
+    """
+    region_config: ocr.RegionConfig
+    window_hint: str | None = None
+    last_goal_path: str | None = None
+
+
+def _resolve_window_hint(session: _SessionState) -> str:
+    return session.window_hint or session.region_config.window_title_hint
+
+
+def _pick_window_interactively(matches: list[capture.WindowInfo]) -> capture.WindowInfo | None:
+    """Same shape as _select_goal_path (numbered list, blank cancels) --
+    lets _recover_window_error offer a concrete choice instead of just
+    telling the user to go run --list-windows themselves.
+    """
+    print("\nVisible windows:")
+    for i, w in enumerate(matches, 1):
+        print(f"  {i}. owner={w.owner_name!r} title={w.title!r}")
+    raw = input("\nPick a number (blank to cancel): ").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        idx = int(raw)
+        if 1 <= idx <= len(matches):
+            return matches[idx - 1]
+        print(f"{idx} isn't one of the listed options.")
+        return None
+    print(f"{raw!r} isn't a number.")
+    return None
+
+
+def _recover_window_error(err: Exception, session: _SessionState) -> bool:
+    """Handles the three window-related exceptions calibrate/dry-run/farm
+    can raise by offering an interactive pick instead of crashing the
+    whole REPL with a traceback. Returns True if the caller should retry
+    the command (a window was picked), False to give up quietly.
+    """
+    print(f"\n{err}")
+    if isinstance(err, capture.AmbiguousWindowError):
+        candidates = err.matches  # already computed by find_game_window -- no need to re-query
+    elif isinstance(err, capture.WindowNotFoundError):
+        candidates = capture.find_windows("")
+        if not candidates:
+            print("no visible windows at all -- is the game running?")
+            return False
+    else:  # ScreenCapturePermissionError -- an OS permission grant, nothing to pick here
+        return False
+
+    picked = _pick_window_interactively(candidates)
+    if picked is None:
+        return False
+    session.window_hint = picked.owner_name or picked.title
+    print(f"using {session.window_hint!r} for this session -- retrying...")
+    return True
+
+
+def _run_with_window_recovery(action: Callable[[], None], session: _SessionState) -> None:
+    while True:
+        try:
+            action()
+            return
+        except (capture.WindowNotFoundError, capture.AmbiguousWindowError, capture.ScreenCapturePermissionError) as e:
+            if not _recover_window_error(e, session):
+                return
+
+
+def _print_status(session: _SessionState) -> None:
+    lines, _ = _tesseract_status_lines()
+    for line in lines:
+        print(line)
+
+    hint = _resolve_window_hint(session)
+    matches = capture.find_windows(hint)
+    if len(matches) == 1:
+        w = matches[0]
+        print(f"window: found (owner={w.owner_name!r} title={w.title!r})")
+    elif len(matches) > 1:
+        print(f"window: {len(matches)} windows match {hint!r} -- ambiguous, will prompt when needed")
+    else:
+        print(f"window: not found (looking for {hint!r} -- use 'window <hint>' to override)")
+
+    print(f"goal: {session.last_goal_path or 'none selected yet'}")
+
+
+_COMMANDS: list[tuple[tuple[str, ...], str]] = [
+    (("1", "wizard", "goal"), "Build a new goal config (wizard)"),
+    (("2", "edit"), "Edit an existing goal"),
+    (("3", "calibrate"), "Calibrate against your window"),
+    (("4", "dry-run"), "Test a goal against the current screen (safe, won't accept/reject/reroll)"),
+    (("5", "farm"), "Start farming with a goal"),
+    (("6", "selfcheck"), "Run diagnostics"),
+    (("7", "windows"), "List visible windows"),
+    (("8", "package-failure", "bug-report"), "Package up my last failure (for a bug report)"),
+    (("window",), "Show or set the window title/owner hint for this session, e.g. 'window Monster Hunter'"),
+    (("status",), "Show tesseract/window/goal status"),
+    (("help", "?"), "Show this command list"),
+    (("0", "exit", "quit", "q"), "Exit"),
+]
+
+
+def _build_completer() -> WordCompleter:
+    words = [name for names, _ in _COMMANDS for name in names if not name.isdigit()]
+    return WordCompleter(words, ignore_case=True)
+
+
+def _make_command_reader(completer: WordCompleter, history_path: Path) -> Callable[[str], str]:
+    """Returns a read(label) -> str function for the REPL's main loop.
+    Prefers prompt_toolkit (tab-completion, persistent history, a
+    colored prompt), but falls back to plain input() if prompt_toolkit
+    can't get a real console -- confirmed live: its Windows output
+    backend needs a genuine attached console handle and raises
+    constructing PromptSession itself (not lazily, so this try/except
+    catches it up front) whenever stdout is redirected/piped, even from
+    a real cmd.exe/PowerShell session. Falling back keeps the REPL
+    itself always usable instead of crashing over a cosmetic feature.
+    """
+    try:
+        session = PromptSession(completer=completer, history=FileHistory(str(history_path)))
+    except Exception:
+        print("(tab-completion/history unavailable in this console -- falling back to plain input)")
+        return lambda label: input(f"\n{label}")
+    return lambda label: session.prompt(HTML(f"\n<ansicyan>{label}</ansicyan>"))
+
+
+def _print_help() -> None:
+    print("\nCommands:")
+    for names, desc in _COMMANDS:
+        primary = ", ".join(n for n in names if not n.isdigit()) or names[0]
+        print(f"  {primary:<28s} {desc}")
+
+
 def _interactive_menu() -> None:
     """Zero-arguments fallback -- this is what runs if you double-click
     the compiled exe (which passes no arguments) instead of it just
@@ -187,30 +352,44 @@ def _interactive_menu() -> None:
     via CLI flags for scripting/tuning; this just picks sensible
     defaults and walks through the same options with prompts instead of
     needing to know the flags up front.
+
+    A named-command REPL (prompt_toolkit: tab-completion + persistent
+    history) rather than a numbered list reprinted every loop -- but the
+    original numbers still work as aliases so existing muscle memory
+    isn't broken. calibrate/dry-run/farm all route through
+    _run_with_window_recovery so a WindowNotFoundError/AmbiguousWindowError
+    (previously an uncaught crash -- see the CHANGELOG) offers an
+    interactive pick instead.
     """
-    print("Qurio Augmentation Automation -- interactive menu")
-    print("(command-line flags also work here -- see --help for the full list)")
-    region_config = None
+    session = _SessionState(region_config=ocr.load_region_config())
+    Path("logs").mkdir(exist_ok=True)
+    read_command = _make_command_reader(_build_completer(), Path("logs") / ".repl_history")
+
+    print("Qurio Augmentation Automation")
+    print("Type 'help' to see commands (the old numbered options still work too).\n")
+    _print_status(session)
+
     while True:
-        print("""
-1. Build a new goal config (wizard)
-2. Edit an existing goal
-3. Calibrate against your window
-4. Test a goal against the current screen (dry-run -- safe, won't accept/reject/reroll)
-5. Start farming with a goal
-6. Run diagnostics (selfcheck)
-7. List visible windows
-8. Package up my last failure (for a bug report)
-0. Exit""")
+        label = f"qurio-aug [{session.last_goal_path}]> " if session.last_goal_path else "qurio-aug> "
         try:
-            choice = input("\nChoose an option: ").strip()
-        except EOFError:
+            raw = read_command(label)
+        except (EOFError, KeyboardInterrupt):
+            print()
             return
-        if choice in ("0", "q", "quit", "exit"):
+        # Confirmed live: PowerShell prepends a BOM (U+FEFF) to the very
+        # first line of piped/redirected stdin -- harmless to strip
+        # unconditionally since it's never a legitimate command character.
+        raw = raw.strip().lstrip("﻿")
+        if not raw:
+            continue
+        cmd, _, rest = raw.partition(" ")
+        cmd, rest = cmd.lower(), rest.strip()
+
+        if cmd in ("0", "exit", "quit", "q"):
             return
-        elif choice == "1":
+        elif cmd in ("1", "wizard", "goal"):
             run_wizard()
-        elif choice == "2":
+        elif cmd in ("2", "edit"):
             goal_path = _select_goal_path()
             if goal_path is None:
                 continue
@@ -223,10 +402,11 @@ def _interactive_menu() -> None:
                 print(f"couldn't read {goal_path}: {e}", file=sys.stderr)
                 continue
             run_editor(goal, Path(goal_path))
-        elif choice == "3":
-            calibrate.main()
-        elif choice in ("4", "5"):
-            goal_path = _select_goal_path()
+        elif cmd in ("3", "calibrate"):
+            _run_with_window_recovery(lambda: calibrate.main(_resolve_window_hint(session)), session)
+        elif cmd in ("4", "dry-run", "5", "farm"):
+            is_farm = cmd in ("5", "farm")
+            goal_path = _select_goal_path(default=session.last_goal_path)
             if goal_path is None:
                 continue
             try:
@@ -237,31 +417,43 @@ def _interactive_menu() -> None:
             except OSError as e:
                 print(f"couldn't read {goal_path}: {e}", file=sys.stderr)
                 continue
-            if region_config is None:
-                region_config = ocr.load_region_config()
+            session.last_goal_path = goal_path
             max_attempts = state_machine.MAX_ATTEMPTS_DEFAULT
-            if choice == "5":
+            if is_farm:
                 max_attempts = _prompt_max_attempts(state_machine.MAX_ATTEMPTS_DEFAULT)
             common_kwargs = dict(
-                window_title_hint=None,
-                region_config=region_config,
+                window_title_hint=_resolve_window_hint(session),
+                region_config=session.region_config,
                 press_hold=PRESS_HOLD,
                 post_press_delay=POST_PRESS_DELAY,
                 settle_delay=state_machine.RESULT_SETTLE_DELAY,
             )
-            _run_with_hotkeys(
-                goal, dry_run=(choice == "4"), max_attempts=max_attempts,
-                common_kwargs=common_kwargs,
-                start_hotkey=DEFAULT_START_HOTKEY, stop_hotkey=DEFAULT_STOP_HOTKEY,
+            _run_with_window_recovery(
+                lambda: _run_with_hotkeys(
+                    goal, dry_run=not is_farm, max_attempts=max_attempts,
+                    common_kwargs=common_kwargs,
+                    start_hotkey=DEFAULT_START_HOTKEY, stop_hotkey=DEFAULT_STOP_HOTKEY,
+                ),
+                session,
             )
-        elif choice == "6":
+        elif cmd in ("6", "selfcheck"):
             _run_selfcheck()
-        elif choice == "7":
+        elif cmd in ("7", "windows"):
             _list_windows()
-        elif choice == "8":
+        elif cmd in ("8", "package-failure", "bug-report"):
             _run_package_failure()
+        elif cmd == "window":
+            if not rest:
+                print(f"current window hint: {_resolve_window_hint(session)!r}")
+            else:
+                session.window_hint = rest
+                print(f"window hint set to {rest!r} for this session")
+        elif cmd == "status":
+            _print_status(session)
+        elif cmd in ("help", "?"):
+            _print_help()
         else:
-            print(f"{choice!r} isn't one of the options above.")
+            print(f"{raw!r} isn't a recognized command -- type 'help' to see the list.")
 
 
 def main() -> None:
@@ -274,6 +466,17 @@ def main() -> None:
         # someone find the right --window value.
         sys.stdout.reconfigure(errors="replace")
         sys.stderr.reconfigure(errors="replace")
+        # Confirmed live against the compiled exe specifically (not the
+        # source venv): redirected/piped stdin defaults to the legacy
+        # console codepage there, which doesn't understand UTF-8 -- a
+        # leading BOM (PowerShell prepends one piping into a native exe)
+        # came through as 3 mis-decoded Latin-1-ish characters instead of
+        # one U+FEFF, which the REPL's own BOM-strip couldn't catch since
+        # it wasn't looking for that. Forcing UTF-8 here fixes decoding at
+        # the source; real interactive keyboard input on Windows is read
+        # via a separate console API path CPython special-cases, so this
+        # only affects the redirected/piped case where it was broken.
+        sys.stdin.reconfigure(encoding="utf-8")
     if len(sys.argv) == 1:
         configure_tesseract()
         try:
@@ -416,13 +619,21 @@ def main() -> None:
         settle_delay=args.settle_delay,
     )
 
-    if args.no_hotkeys:
-        _countdown(args.start_delay)
-        sys.exit(_execute(goal, args.dry_run, args.max_attempts, lambda: False, **common_kwargs))
+    try:
+        if args.no_hotkeys:
+            _countdown(args.start_delay)
+            sys.exit(_execute(goal, args.dry_run, args.max_attempts, lambda: False, **common_kwargs))
 
-    sys.exit(_run_with_hotkeys(
-        goal, args.dry_run, args.max_attempts, common_kwargs, args.start_hotkey, args.stop_hotkey,
-    ))
+        sys.exit(_run_with_hotkeys(
+            goal, args.dry_run, args.max_attempts, common_kwargs, args.start_hotkey, args.stop_hotkey,
+        ))
+    except (capture.WindowNotFoundError, capture.AmbiguousWindowError, capture.ScreenCapturePermissionError) as e:
+        # Previously an uncaught traceback -- a script/CLI invocation isn't
+        # expecting a prompt, so this stays fail-fast (unlike the REPL's
+        # interactive _run_with_window_recovery), just with a clean message.
+        print(f"{e}", file=sys.stderr)
+        print("-- pass --window to override, or run --list-windows to see what's visible", file=sys.stderr)
+        sys.exit(1)
 
 
 def _execute(goal, dry_run: bool, max_attempts: int, should_stop, **common_kwargs) -> int:
