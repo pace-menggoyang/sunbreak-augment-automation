@@ -123,13 +123,10 @@ worth prioritizing over the above.
    cross-machine -- worth revisiting only if a beta tester's failures
    look threshold-related.
 
-7. **A visible progress readout during a long run** (attempt N/max,
-   rough rate, elapsed time) instead of scrolling per-attempt text.
-
-8. **A sound or system notification on accept**, so a long unattended
+7. **A sound or system notification on accept**, so a long unattended
    run doesn't require watching the terminal to notice it finished.
 
-9. **Code signing.** Removes the Gatekeeper/SmartScreen warnings
+8. **Code signing.** Removes the Gatekeeper/SmartScreen warnings
    entirely. Costs real money (~$100-400/yr depending on platform) and
    isn't a code change -- a project/budget decision, not engineering
    work.

@@ -6,6 +6,17 @@ project doesn't yet follow strict semantic versioning (it's still beta).
 
 ## [Unreleased]
 
+- Feature: a long run now shows a live, in-place progress readout
+  (attempt N/max, rough attempts/min rate, elapsed time) instead of a
+  full decision line scrolling past for every single attempt -- almost
+  all of which are uninteresting rejects in a long run, and the full
+  detail is always in the `.log`/`.jsonl` files regardless. An accepted
+  attempt, or one flagged suspicious (a possible OCR misread -- an
+  unusually large delta), still prints its full line immediately, since
+  those are exactly the moments worth seeing live. Only kicks in when
+  connected to a real terminal; output redirected to a file or pipe
+  prints every attempt's full line unchanged, since an in-place update
+  would just be unreadable noise there.
 - Perf: the value cell's "Lv +", "Lv -", or "None" text is now read via
   color + structure pixel analysis instead of a Tesseract call, for the
   common case -- the delta's rendered color already encodes gain (green)

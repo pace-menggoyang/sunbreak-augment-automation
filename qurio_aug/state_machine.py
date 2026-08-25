@@ -9,6 +9,7 @@ menu navigation to get there is out of scope, per the user's design call.
 """
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -530,6 +531,29 @@ class RunResult:
     stopped: bool = False  # True if a force-stop hotkey ended the run early
 
 
+# Wide enough for the longest realistic line ("attempt 300/300  |  999.9/min
+# |  elapsed 999m59s" is 49 chars) with margin -- padded to this width so an
+# in-place \r update never leaves a trailing fragment of a longer previous
+# line on screen (e.g. the moment attempt count gains a digit).
+_PROGRESS_LINE_WIDTH = 70
+
+
+def _format_progress(attempt: int, max_attempts: int, elapsed: float) -> str:
+    """One-line progress readout for a long run -- attempt count, a rough
+    attempts/min rate, and elapsed time -- meant to replace a full
+    per-attempt log line scrolling past for every single reject, which is
+    most of a long run's output and rarely worth reading live (the full
+    detail is always in the .log/.jsonl files regardless -- see
+    AttemptLogger). run() only uses this in place of the real per-attempt
+    line for a "boring" (non-accepted, non-suspicious) attempt; see run's
+    own docstring/body for when it falls back to the full line instead.
+    """
+    rate = attempt / elapsed * 60 if elapsed > 0 else 0.0
+    mins, secs = divmod(int(elapsed), 60)
+    text = f"attempt {attempt}/{max_attempts}  |  {rate:.1f}/min  |  elapsed {mins}m{secs:02d}s"
+    return text.ljust(_PROGRESS_LINE_WIDTH)
+
+
 def evaluate_current_screen(
     goal: Goal,
     *,
@@ -612,6 +636,18 @@ def run(
     StopRequested is caught here specifically (not left to propagate) so
     a mid-run stop returns a normal RunResult(stopped=True) instead of an
     exception the caller has to handle separately.
+
+    Console output during the loop is a live, in-place progress readout
+    (attempt N/max, rough rate, elapsed time -- see _format_progress)
+    rather than one full decision line scrolling past per attempt, since
+    almost every attempt in a long run is an uninteresting reject and the
+    full detail is always in AttemptLogger's .log/.jsonl files regardless.
+    An accepted attempt, or one flagged suspicious (possible OCR misread,
+    per logger.format_line), always prints its full line instead, since
+    those are exactly the moments worth seeing live. Only kicks in when
+    stdout is a real terminal -- redirected to a file/pipe, an in-place
+    \r update would just be unreadable noise, so every attempt prints its
+    full line there, unchanged from before this existed.
     """
     region_config = region_config or ocr.load_region_config()
     window = capture.find_game_window(window_title_hint or region_config.window_title_hint)
@@ -623,6 +659,9 @@ def run(
 
     decision = None
     attempt = 0
+    live_progress = sys.stdout.isatty()
+    dangling = False  # True if stdout's last write has no trailing newline (an in-place progress update)
+    start_time = time.monotonic()
     try:
         game.park_mouse(window.bounds)
         game.trigger_roll()  # STATE1 -> first STATE4 result
@@ -633,7 +672,19 @@ def run(
                 log.debug,
             )
             decision = evaluate(goal, roll)
-            print(log.log(decision))
+            line = log.log(decision)
+            notable = decision.accepted or any(r.is_suspicious for r in decision.added + decision.removed)
+
+            if live_progress and not notable:
+                elapsed = time.monotonic() - start_time
+                sys.stdout.write("\r" + _format_progress(attempt, max_attempts, elapsed))
+                sys.stdout.flush()
+                dangling = True
+            else:
+                if dangling:
+                    sys.stdout.write("\n")
+                    dangling = False
+                print(line)
 
             if decision.accepted:
                 game.accept_macro()
@@ -641,7 +692,11 @@ def run(
             else:
                 game.reroll_macro()
     except StopRequested:
+        if dangling:
+            sys.stdout.write("\n")
         print(f"\nForce-stopped after {attempt} attempt(s).")
         return RunResult(False, attempt, decision, stopped=True)
 
+    if dangling:
+        sys.stdout.write("\n")
     return RunResult(False, max_attempts, decision)

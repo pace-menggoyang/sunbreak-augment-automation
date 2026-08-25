@@ -2,16 +2,19 @@
 state_machine.read_full_roll, using monkeypatched ocr.read_page /
 ocr.read_page_indicator so no real screenshots/OCR/game are needed.
 """
+import io
 import sys
+import tempfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PIL import Image
 
 from qurio_aug import ocr, state_machine
-from qurio_aug.decision import Goal, Profile, RequiredSkill, SkillResult
+from qurio_aug.decision import Decision, Goal, Profile, RequiredSkill, SkillResult
 
 # A real (if trivial) image -- state_machine.read_full_roll now saves the
 # screenshot to logs/ on an UnreadableRollError, so the fake screenshot
@@ -42,6 +45,9 @@ class FakeGame:
         self.next_calls = 0
         self.prev_calls = 0
         self.park_calls = 0
+        self.trigger_calls = 0
+        self.accept_calls = 0
+        self.reroll_calls = 0
 
     def next_page(self):
         self.next_calls += 1
@@ -51,6 +57,17 @@ class FakeGame:
 
     def park_mouse(self, window_bounds):
         self.park_calls += 1
+
+    # Only exercised by the state_machine.run() tests below -- read_full_roll
+    # itself never calls these.
+    def trigger_roll(self):
+        self.trigger_calls += 1
+
+    def accept_macro(self):
+        self.accept_calls += 1
+
+    def reroll_macro(self):
+        self.reroll_calls += 1
 
 
 DUMMY_WINDOW_BOUNDS = (0.0, 0.0, 1440.0, 900.0)
@@ -653,6 +670,143 @@ def test_read_full_roll_propagates_stop_requested(monkeypatch):
     except state_machine.StopRequested:
         pass
     assert script.calls == 0  # never got as far as reading a page
+
+
+# --- run(): the full autonomous loop, previously entirely uncovered (it
+# needs a real game window otherwise) -- monkeypatches every boundary
+# (window capture, GameInput, evaluate, AttemptLogger's log_dir) to drive
+# it fully offline. Focused on the new progress-readout behavior itself,
+# not re-testing read_full_roll's pagination logic (covered above). ---
+
+class _FakeTTYStdout(io.StringIO):
+    """A real terminal always has isatty() True -- run()'s in-place
+    progress readout only kicks in then, so this is needed to actually
+    exercise that path under pytest, which otherwise captures stdout as a
+    non-tty pipe."""
+
+    def isatty(self):
+        return True
+
+
+def test_run_uses_progress_readout_for_boring_attempts_and_full_lines_for_notable_ones(monkeypatch):
+    game = FakeGame()
+    script = Script(monkeypatch, [
+        (None, [_row("Artillery"), _blank(), _blank()]),
+    ], game=game)
+
+    monkeypatch.setattr(state_machine.capture, "find_game_window", lambda hint: SimpleNamespace(bounds=DUMMY_WINDOW_BOUNDS))
+    monkeypatch.setattr(state_machine.capture, "screenshot_window", lambda window: script.screenshot_fn())
+    monkeypatch.setattr(state_machine, "GameInput", lambda **kwargs: game)
+
+    original_logger_cls = state_machine.AttemptLogger
+    tmpdir = tempfile.TemporaryDirectory()
+    monkeypatch.setattr(
+        state_machine, "AttemptLogger",
+        lambda goal: original_logger_cls(goal=goal, log_dir=Path(tmpdir.name)),
+    )
+
+    # attempt 1: boring reject -- should collapse to the in-place progress
+    # line, no per-attempt detail printed. attempt 2: rejected but with a
+    # suspiciously large delta -- must break through with its full line
+    # even though it isn't accepted. attempt 3: accepted -- also a full
+    # line, and ends the loop.
+    decisions = iter([
+        Decision(False, "goal not met", [SkillResult("Artillery", delta=1)], []),
+        Decision(False, "goal not met", [SkillResult("Weird Skill", delta=9)], []),
+        Decision(True, "matched profile", [SkillResult("Artillery", delta=1)], []),
+    ])
+    monkeypatch.setattr(state_machine, "evaluate", lambda goal, roll: next(decisions))
+
+    fake_out = _FakeTTYStdout()
+    monkeypatch.setattr(sys, "stdout", fake_out)
+    try:
+        result = state_machine.run(_goal(), region_config=DUMMY_REGION_CONFIG, max_attempts=5)
+    finally:
+        tmpdir.cleanup()
+
+    output = fake_out.getvalue()
+    assert result.accepted
+    assert result.attempts == 3
+    assert game.trigger_calls == 1
+    assert game.accept_calls == 1
+    assert game.reroll_calls == 2  # attempts 1 and 2 both reject (2 is notable, but still rerolled)
+
+    assert "attempt 1/5" in output  # boring attempt 1's in-place progress line
+    assert "[attempt #1]" not in output  # ...and never its full log line
+    assert "[attempt #2]" in output  # suspicious attempt 2 breaks through
+    assert "[?!] UNUSUALLY LARGE DELTA" in output
+    assert "[attempt #3]" in output  # accepted attempt 3
+    assert "ACCEPTED" in output
+
+
+def test_run_prints_every_full_line_when_stdout_is_not_a_tty(monkeypatch):
+    # Redirected to a file/pipe -- an in-place \r update would just be
+    # unreadable noise, so every attempt (even a boring one) prints its
+    # full line instead, matching the pre-progress-readout behavior
+    # exactly for this case.
+    game = FakeGame()
+    script = Script(monkeypatch, [
+        (None, [_row("Artillery"), _blank(), _blank()]),
+    ], game=game)
+
+    monkeypatch.setattr(state_machine.capture, "find_game_window", lambda hint: SimpleNamespace(bounds=DUMMY_WINDOW_BOUNDS))
+    monkeypatch.setattr(state_machine.capture, "screenshot_window", lambda window: script.screenshot_fn())
+    monkeypatch.setattr(state_machine, "GameInput", lambda **kwargs: game)
+
+    original_logger_cls = state_machine.AttemptLogger
+    tmpdir = tempfile.TemporaryDirectory()
+    monkeypatch.setattr(
+        state_machine, "AttemptLogger",
+        lambda goal: original_logger_cls(goal=goal, log_dir=Path(tmpdir.name)),
+    )
+
+    decisions = iter([
+        Decision(False, "goal not met", [SkillResult("Artillery", delta=1)], []),
+        Decision(True, "matched profile", [SkillResult("Artillery", delta=1)], []),
+    ])
+    monkeypatch.setattr(state_machine, "evaluate", lambda goal, roll: next(decisions))
+
+    fake_out = io.StringIO()  # isatty() is False by default
+    monkeypatch.setattr(sys, "stdout", fake_out)
+    try:
+        result = state_machine.run(_goal(), region_config=DUMMY_REGION_CONFIG, max_attempts=5)
+    finally:
+        tmpdir.cleanup()
+
+    output = fake_out.getvalue()
+    assert result.accepted
+    assert "[attempt #1]" in output  # boring attempt still prints its full line
+    assert "[attempt #2]" in output
+    assert "attempt 1/5" not in output  # progress readout never used
+
+
+# --- _format_progress: the live in-place progress readout run() prints for
+# a "boring" (non-accepted, non-suspicious) attempt on a long run, instead
+# of one full decision line scrolling past per attempt. Pure formatting,
+# no game/OCR dependencies. ---
+
+def test_format_progress_shows_attempt_rate_and_elapsed(monkeypatch):
+    line = state_machine._format_progress(30, 300, elapsed=60.0)
+    assert "attempt 30/300" in line
+    assert "30.0/min" in line
+    assert "elapsed 1m00s" in line
+
+
+def test_format_progress_handles_zero_elapsed(monkeypatch):
+    # Guards the division-by-zero edge case at the very first attempt,
+    # before any real time has passed yet.
+    line = state_machine._format_progress(1, 300, elapsed=0.0)
+    assert "0.0/min" in line
+    assert "elapsed 0m00s" in line
+
+
+def test_format_progress_padded_to_fixed_width(monkeypatch):
+    # Padded so an in-place \r update always fully overwrites a longer
+    # previous line (e.g. the moment attempt count gains a digit) --
+    # never leaves a trailing fragment of it on screen.
+    short = state_machine._format_progress(9, 300, elapsed=5.0)
+    long = state_machine._format_progress(299, 300, elapsed=5000.0)
+    assert len(short) == len(long) == state_machine._PROGRESS_LINE_WIDTH
 
 
 def run_all():
