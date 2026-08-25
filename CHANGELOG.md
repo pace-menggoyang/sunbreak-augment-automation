@@ -34,20 +34,40 @@ project doesn't yet follow strict semantic versioning (it's still beta).
   #3 for the full measurement writeup, including a real pitfall caught
   before shipping: naively reusing an existing digit-run-width check
   would have misclassified a real "None" removal as numeric.
-- Perf (Windows): the compiled `.exe` shrank from 149MB to 94.4MB (37%)
-  by trimming the vendored Tesseract install to exactly what
-  `tesseract.exe` needs to run, instead of copying Chocolatey's entire
-  install directory. `packaging/trim_tesseract_windows.py` computes the
-  real dependency closure via a PE import-table walk (same idea as
-  `vendor_tesseract_macos.sh`'s `dylibbundler` step, just for PE instead
-  of Mach-O) -- previously not possible to verify without real Windows
-  hardware, which is exactly why the blind copy-everything approach was
-  chosen in the first place. Measured: of the ~229MB raw install, ~110MB
-  was dead weight -- a dozen model-training tools this project never
-  invokes (`text2image.exe`, `lstmtraining.exe`, `mftraining.exe`, etc.)
-  plus a large ICU/Pango/Cairo stack only *those* tools need, not OCR
-  itself. Verified after trimming: `tesseract.exe --version`, a real OCR
-  call through the trimmed subprocess path, and the full
+- Perf (Windows): the compiled `.exe` shrank from 149MB to **43.8MB**
+  (71%) in two steps, both in `packaging/trim_tesseract_windows.py`:
+  - Trimming the vendored Tesseract install to exactly what
+    `tesseract.exe` needs to run, instead of copying Chocolatey's entire
+    install directory. Computed via a real PE import-table walk (same
+    idea as `vendor_tesseract_macos.sh`'s `dylibbundler` step, just for
+    PE instead of Mach-O) -- previously not possible to verify without
+    real Windows hardware, which is exactly why the blind
+    copy-everything approach was chosen in the first place. Of the
+    ~229MB raw install, ~110MB was dead weight: a dozen model-training
+    tools this project never invokes (`text2image.exe`,
+    `lstmtraining.exe`, `mftraining.exe`, etc.) plus a large
+    ICU/Pango/Cairo stack only *those* tools need, not OCR itself. Took
+    the exe from 149MB to 94.4MB (37%) on its own.
+  - Discovered next, while looking into shrinking it further: both the
+    official UB-Mannheim Tesseract build and Chocolatey's repackaging of
+    it (confirmed byte-identical) ship `libtesseract-5.dll` as an
+    **unstripped mingw debug build** -- 97MB of its 101MB is orphaned
+    DWARF debug sections and a COFF symbol table, confirmed via a real
+    PE section dump and all flagged `IMAGE_SCN_MEM_DISCARDABLE` (the
+    Windows loader never keeps them resident even in the original, so
+    removing them changes nothing at runtime). No `strip`/`objcopy`
+    exists on this Windows toolchain by default, so
+    `trim_tesseract_windows.py` now does the equivalent itself: truncate
+    the file at the debug sections' offset and fix up the handful of PE
+    header fields that reference them. Took the trimmed dependency
+    closure from 121MB to 21.7MB. Verified byte-identical OCR output
+    against the original, unstripped binary across 5 real fixtures x 4
+    psm modes (32 comparisons) before trusting it, plus a full
+    `ocr.read_page()` run through the stripped binary matching the
+    project's own known-good expected result exactly.
+
+  Verified end-to-end after both steps: `tesseract.exe --version`, real
+  OCR calls through the trimmed+stripped subprocess path, and the full
   debridge/sparkle-recovery pipeline against a real contaminated
   fixture all still work correctly; the compiled exe's `--selfcheck`
   passes with both the subprocess and `tesserocr` paths active.
