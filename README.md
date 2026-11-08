@@ -213,6 +213,29 @@ scrolling past per attempt; an accepted roll or a suspiciously large
 delta (a possible OCR misread, worth double-checking against the game)
 always prints its own line immediately.
 
+### Speed presets (experimental)
+
+Pick a preset from the interactive menu's **Speed** entry, or with
+`--speed` on the command line (`--fast` is shorthand for `--speed fast`):
+
+| Preset | What it changes | Speed | Risk |
+|---|---|---|---|
+| `normal` (default) | Nothing -- the tested defaults | -- | -- |
+| `safe` ("Faster") | A shorter wait before reading each roll | ~17% faster | None for the game: if a sparkle hasn't faded the row is simply re-read |
+| `fast` ("Fast", **experimental**) | Also a shorter delay between key presses | ~55% faster | A key can land mid-transition (see below) |
+
+The speed-ups are estimates from the beta logs (about 2.0s per attempt at
+the defaults, of which ~1.5s is key delays and 0.5s is the settle wait).
+
+`fast` guards itself: if a stray dialog appears it dismisses it and widens
+the key delay a notch (never past the normal delay), and after 3 stray
+dialogs in one run it switches itself back to `normal` for the rest of that
+run and says so. Still validate it first with `--max-attempts 10-20`,
+watching that the game lands on the expected screen each time. The run
+summary printed at the end shows the preset used and whether it had to
+switch itself off. Passing `--press-hold`, `--post-press-delay` or
+`--settle-delay` explicitly overrides the preset's value for that knob.
+
 ### Tuning speed for long runs
 
 `--press-hold`, `--post-press-delay`, and `--settle-delay` control the

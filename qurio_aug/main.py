@@ -45,7 +45,7 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 
-from qurio_aug import calibrate, capture, ocr, state_machine, tui
+from qurio_aug import calibrate, capture, ocr, speed, state_machine, tui
 from qurio_aug.goal_config import GoalValidationError, load_goal
 from qurio_aug.goal_wizard import run_editor, run_wizard
 from qurio_aug.hotkeys import DEFAULT_START_HOTKEY, DEFAULT_STOP_HOTKEY, HotkeyController
@@ -178,6 +178,31 @@ def _select_goal_path(default: str | None = None) -> str | None:
     return choice
 
 
+def _pick_speed(session: _SessionState) -> None:
+    """Menu entry for choosing a speed profile (see speed.py) for the rest
+    of this session's dry-runs and farming runs. The two faster levels are
+    kept distinct on purpose: "Faster" only shortens the wait before
+    reading a roll, which can't desync the game; "Fast" also shortens the
+    delay between key presses, which can.
+    """
+    items = [(p.key, f"{p.label} -- {p.description}") for p in speed.PROFILES.values()]
+    choice = tui.pick("Speed", items, default=session.speed, on_ctrl_c="cancel")
+    if choice is None:
+        return
+    session.speed = choice
+    print(f"speed set to {speed.get_profile(choice).label}")
+    if speed.get_profile(choice).experimental:
+        print(tui.warn(_EXPERIMENTAL_SPEED_WARNING))
+
+
+_EXPERIMENTAL_SPEED_WARNING = (
+    "Fast mode is experimental: a shorter delay between key presses can make a key land "
+    "mid-transition. It slows itself down if a stray dialog appears and switches itself off "
+    "after 3, but validate it with a small run first (e.g. max attempts 20) and watch that "
+    "the game lands on the expected screen each time."
+)
+
+
 def _prompt_max_attempts(default: int) -> int:
     """Only meaningful for a real farming run (choice 4) -- dry-run
     (choice 3) ignores max_attempts entirely (see _execute), so it isn't
@@ -211,6 +236,7 @@ class _SessionState:
     region_config: ocr.RegionConfig
     window_hint: str | None = None
     last_goal_path: str | None = None
+    speed: str = "normal"  # a speed.PROFILES key, set from the menu's Speed entry
 
 
 def _resolve_window_hint(session: _SessionState) -> str:
@@ -282,6 +308,7 @@ def _status_summary(session: _SessionState) -> list[str]:
     else:
         lines.append(f"window: not found (looking for {hint!r} -- use 'window <hint>' to override)")
     lines.append(f"goal: {session.last_goal_path or 'none selected yet'}")
+    lines.append(f"speed: {speed.get_profile(session.speed).label}")
     return lines
 
 
@@ -294,6 +321,8 @@ def _classify_status_line(line: str) -> str:
     if line.startswith("goal:"):
         return "neutral"
     lowered = line.lower()
+    if lowered.startswith("speed:"):
+        return "warn" if "experimental" in lowered else "neutral"
     if lowered.startswith("tesseract:") and "failed" in lowered:
         return "bad"  # a real blocking problem, not just "not set up yet"
     if "inactive" in lowered or "ambiguous" in lowered or "not found" in lowered:
@@ -320,6 +349,7 @@ _COMMANDS: list[tuple[tuple[str, ...], str]] = [
     (("7", "windows"), "List visible windows"),
     (("8", "package-failure", "bug-report"), "Package up my last failure (for a bug report)"),
     (("window",), "Show or set the window title/owner hint for this session, e.g. 'window Monster Hunter'"),
+    (("speed",), "Choose a speed: Normal, Faster, or Fast (experimental)"),
     (("status",), "Show tesseract/window/goal status"),
     (("help", "?"), "Show this command list"),
     (("0", "exit", "quit", "q"), "Exit"),
@@ -372,6 +402,7 @@ _MENU_ITEMS: list[tuple[str, str]] = [
     ("windows", "List visible windows"),
     ("package-failure", "Package up my last failure (for a bug report)"),
     ("window", "Set/override the window title/owner hint for this session"),
+    ("speed", "Speed: Normal / Faster / Fast (experimental)"),
     ("exit", "Exit"),
 ]
 
@@ -510,12 +541,14 @@ def _dispatch_command(cmd: str, rest: str, session: _SessionState) -> bool:
         max_attempts = state_machine.MAX_ATTEMPTS_DEFAULT
         if is_farm:
             max_attempts = _prompt_max_attempts(state_machine.MAX_ATTEMPTS_DEFAULT)
+        profile = speed.get_profile(session.speed)
         common_kwargs = dict(
             window_title_hint=_resolve_window_hint(session),
             region_config=session.region_config,
-            press_hold=PRESS_HOLD,
-            post_press_delay=POST_PRESS_DELAY,
-            settle_delay=state_machine.RESULT_SETTLE_DELAY,
+            press_hold=profile.press_hold,
+            post_press_delay=profile.post_press_delay,
+            settle_delay=profile.settle_delay,
+            speed=profile,
         )
         _run_with_window_recovery(
             lambda: _run_with_hotkeys(
@@ -531,6 +564,14 @@ def _dispatch_command(cmd: str, rest: str, session: _SessionState) -> bool:
         _list_windows()
     elif cmd in ("8", "package-failure", "bug-report"):
         _run_package_failure()
+    elif cmd == "speed":
+        if rest in speed.PROFILES:  # typed REPL shortcut: "speed fast"
+            session.speed = rest
+            print(f"speed set to {speed.get_profile(rest).label}")
+            if speed.get_profile(rest).experimental:
+                print(tui.warn(_EXPERIMENTAL_SPEED_WARNING))
+        else:
+            _pick_speed(session)
     elif cmd == "window":
         if not rest:
             print(f"current window hint: {_resolve_window_hint(session)!r}")
@@ -653,14 +694,14 @@ def main() -> None:
     parser.add_argument(
         "--press-hold",
         type=float,
-        default=PRESS_HOLD,
+        default=None,  # None = whatever --speed's profile says (normal: PRESS_HOLD)
         help=f"seconds to hold each key down (default {PRESS_HOLD}). Low risk to "
         f"lower -- mainly needs to clear the input system's registration threshold.",
     )
     parser.add_argument(
         "--post-press-delay",
         type=float,
-        default=POST_PRESS_DELAY,
+        default=None,  # None = whatever --speed's profile says (normal: POST_PRESS_DELAY)
         help=f"seconds to wait after each key before the next one (default "
         f"{POST_PRESS_DELAY}). This is standing in for menu transition time -- "
         f"cutting it too far risks a later keypress in a macro landing mid-"
@@ -671,11 +712,25 @@ def main() -> None:
     parser.add_argument(
         "--settle-delay",
         type=float,
-        default=state_machine.RESULT_SETTLE_DELAY,
+        default=None,  # None = whatever --speed's profile says (normal: RESULT_SETTLE_DELAY)
         help=f"seconds to wait after a roll lands before the first capture, for "
         f"the sparkle decoration to fade (default {state_machine.RESULT_SETTLE_DELAY}). "
         f"Lower-risk to cut than the press delays -- worst case is one extra "
         f"retry, not a state desync.",
+    )
+    parser.add_argument(
+        "--speed",
+        choices=sorted(speed.PROFILES),
+        default="normal",
+        help="speed preset: 'normal' (the tested defaults), 'safe' (a shorter wait before "
+        "reading each roll -- ~17%% faster, can't desync the game), or 'fast' (EXPERIMENTAL: "
+        "also a shorter delay between key presses -- ~55%% faster, but a key can land "
+        "mid-transition; slows itself down on stray dialogs and switches itself off after 3). "
+        "--press-hold/--post-press-delay/--settle-delay override the preset when given.",
+    )
+    parser.add_argument(
+        "--fast", action="store_true",
+        help="shorthand for --speed fast (EXPERIMENTAL -- see --speed)",
     )
     args = parser.parse_args()
     configure_tesseract()
@@ -718,12 +773,14 @@ def main() -> None:
         sys.exit(2)
     region_config = ocr.load_region_config()
 
+    profile = speed.get_profile("fast" if args.fast else args.speed)
     common_kwargs = dict(
         window_title_hint=args.window,
         region_config=region_config,
-        press_hold=args.press_hold,
-        post_press_delay=args.post_press_delay,
-        settle_delay=args.settle_delay,
+        press_hold=args.press_hold if args.press_hold is not None else profile.press_hold,
+        post_press_delay=args.post_press_delay if args.post_press_delay is not None else profile.post_press_delay,
+        settle_delay=args.settle_delay if args.settle_delay is not None else profile.settle_delay,
+        speed=profile,
     )
 
     try:
@@ -750,7 +807,13 @@ def _execute(goal, dry_run: bool, max_attempts: int, should_stop, **common_kwarg
     itself, so both main()'s argparse path (which does, for scripting)
     and the interactive menu (which just prints and loops back to the
     menu afterward) can share this.
+
+    A `speed` entry in common_kwargs (a speed.SpeedProfile) is split out
+    here: a dry-run only uses the timings already carried alongside it,
+    while a real run also hands the profile's label and the normal timings
+    to state_machine.run for its guard-rails (see FAST_REVERT_AFTER_DIALOGS).
     """
+    profile = common_kwargs.pop("speed", None)
     if dry_run:
         log = AttemptLogger(goal=goal)
         try:
@@ -762,6 +825,12 @@ def _execute(goal, dry_run: bool, max_attempts: int, should_stop, **common_kwarg
             print(f"Full step-by-step trace: {log._debug_path}", file=sys.stderr)
             return 2
         return 0 if decision.accepted else 1
+
+    if profile is not None and profile.key != speed.NORMAL.key:
+        common_kwargs["speed_label"] = profile.label
+        common_kwargs["fallback_timing"] = speed.NORMAL.timings
+        if profile.experimental:
+            print(tui.warn(_EXPERIMENTAL_SPEED_WARNING))
 
     try:
         result = state_machine.run(
