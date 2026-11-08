@@ -21,6 +21,7 @@ import zipfile
 from pathlib import Path
 
 LOG_DIR = Path("logs")
+MAX_UNRESOLVED_INDICATOR_CLUSTERS = 2
 
 
 def _newest(paths: list[Path]) -> Path | None:
@@ -50,6 +51,17 @@ def build_support_bundle(log_dir: Path = LOG_DIR) -> Path | None:
     latest_failure = _newest(list(log_dir.glob("unreadable_*_full.png")))
     if latest_failure is not None:
         prefix = latest_failure.name[: -len("_full.png")]  # "unreadable_<timestamp>"
+        files.extend(sorted(log_dir.glob(f"{prefix}_*.png")))
+
+    # Unresolved page-indicator captures (see state_machine.
+    # _dump_unresolved_indicator): the screenshots that would finally show
+    # why an indicator can't be read. The newest few only -- each full
+    # screenshot is a few MB, and a run saves up to 5.
+    unresolved = sorted(
+        log_dir.glob("indicator_unresolved_*_full.png"), key=lambda p: p.stat().st_mtime, reverse=True,
+    )[:MAX_UNRESOLVED_INDICATOR_CLUSTERS]
+    for full in unresolved:
+        prefix = full.name[: -len("_full.png")]  # "indicator_unresolved_<timestamp>"
         files.extend(sorted(log_dir.glob(f"{prefix}_*.png")))
 
     if not files:

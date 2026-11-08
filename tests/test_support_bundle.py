@@ -92,6 +92,26 @@ def test_bundles_both_debug_log_and_failure_screenshots_together():
         }
 
 
+def test_bundles_the_newest_unresolved_indicator_captures_only():
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        now = time.time()
+        for i, age in enumerate((3000, 2000, 1000, 0)):  # four captures, oldest first
+            stamp = f"20260101-12000{i}-000"
+            _touch(d / f"indicator_unresolved_{stamp}_full.png", mtime=now - age)
+            _touch(d / f"indicator_unresolved_{stamp}_indicator.png", mtime=now - age)
+        bundle = build_support_bundle(d)
+        with zipfile.ZipFile(bundle) as zf:
+            names = set(zf.namelist())
+        # Only the 2 newest clusters (each a few MB for real), both files of each.
+        assert names == {
+            "indicator_unresolved_20260101-120003-000_full.png",
+            "indicator_unresolved_20260101-120003-000_indicator.png",
+            "indicator_unresolved_20260101-120002-000_full.png",
+            "indicator_unresolved_20260101-120002-000_indicator.png",
+        }
+
+
 def test_ignores_unrelated_files_like_calibration_crops():
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)

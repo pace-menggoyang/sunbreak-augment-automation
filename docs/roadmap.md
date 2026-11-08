@@ -30,15 +30,22 @@ in front of the wider community.
    goal accepted and confirmed for real on attempt #1). Every macro this
    tool sends is now verified to actually land on real Windows hardware.
 
+   **Sustained runs: done (2026-11).** A beta tester's logs cover 157
+   runs and ~158,000 attempts, including single runs of 5,000-7,000+
+   attempts. Everything that ended one early was diagnosed from those logs
+   and fixed in v0.1.6-beta -- 17 of 35 failures were a game dialog over
+   the skill rows, and 14 of the 16 genuine OCR failures were one row
+   (Artillery in a multi-page roll's first row, whose name box also catches
+   the skill icon). See the v0.1.6-beta section of `CHANGELOG.md`. The
+   remaining unknown is whether the fixes hold up in a real run: check the
+   new end-of-run summary (`!`-tagged digits, `name:icon-stripped`,
+   unresolved indicators, dialogs dismissed).
+
    **Still open:** DPI scaling on a display running at other than 100%
-   (this session's display scale wasn't recorded); and a longer sustained
-   run (dozens+ attempts, vs. 5) to rule out anything that only shows up
-   over time (e.g. the memory leaks already fixed on macOS in
-   v0.1.3-beta -- unconfirmed whether Windows has any analogous ones). Both
-   free checks from `docs/ocr-performance-research.md` are done: the
-   vendored Windows `eng.traineddata` is already `tessdata_fast` (#5, no
-   action needed), and the `tesserocr` wheel works and shipped (#1b, see
-   the [Unreleased] section of `CHANGELOG.md`).
+   (this session's display scale wasn't recorded). Both free checks from
+   `docs/ocr-performance-research.md` are done: the vendored Windows
+   `eng.traineddata` is already `tessdata_fast` (#5, no action needed), and
+   the `tesserocr` wheel works and shipped (#1b, see `CHANGELOG.md`).
 
 2. **A page that reads back entirely blank can be a silently wrong/
    occluded screen, and there's no cheap way to tell.** Found live during
@@ -83,6 +90,23 @@ in front of the wider community.
    reliable signal that hasn't been found yet, or an explicit decision
    that the ~100-200ms cost is worth paying on every blank read.
 
+   **New evidence (2026-11), a sharper form of the same problem.** When
+   the page indicator box has content that never parses (still ambiguous
+   after its retries), `read_full_roll` falls back to the single-page
+   layout -- and in the beta logs that read back all-blank 98% of the time
+   (803 of 818 attempts, vs a 17% baseline for ordinary single-page
+   rolls). So most of these are probably real multi-page rolls read with
+   the wrong layout and silently rejected as empty, which could throw away
+   a roll that actually matched. Root cause unconfirmed: no screenshot of
+   one was ever saved. v0.1.6-beta now logs `UNRESOLVED` and saves the
+   first few to `logs/indicator_unresolved_*` (bundled by
+   `package-failure`). **Next step: look at one of those screenshots**,
+   then either make `read_page_indicator` tolerant of whatever is
+   corrupting it, or read both layouts in the unresolved case and use
+   whichever has content. Don't change the fallback blind -- reading
+   `first_of_multi` on a genuinely single-page layout could read
+   misaligned garbage.
+
 ## Medium priority
 
 Clear value, no blocking dependency, moderate effort. Mostly about
@@ -105,18 +129,37 @@ supporting them.
    through that sequence automatically, explaining each step as it goes,
    would remove the remaining "what do I actually do first" confusion.
 
+5. **State-verified key stepping (safer *and* faster than fixed delays).**
+   Every key press currently waits a fixed delay and hopes the menu
+   transition has landed; the experimental Fast preset (v0.1.6-beta) just
+   shortens that wait. A dropped key can do real harm, not just stall: by
+   the macro's own comments, a dropped Left before "Keep the previous
+   results?" would confirm the default No, which may apply the roll that
+   was just rejected. Instead, check a cheap color signature (e.g. which
+   dialog button is highlighted -- no Tesseract needed) before each
+   critical confirm, and proceed the instant it matches instead of
+   sleeping. Needs calibrating against the live game, so it wants a beta
+   tester's captures of each dialog.
+
+6. **Digit corpus for the `!`-tagged reads.** A digit above the plausible
+   delta that no other recognizer can correct is kept, tagged `!`, rather
+   than made unreadable (a misread that repeats on every retry would stop
+   the run). Once real runs have produced some of those crops, decide
+   whether to make them a hard re-capture, or add templates for what they
+   turn out to be.
+
 ## Low priority
 
 Speculative, reactive, or cost money. Worth having on the list, not
 worth prioritizing over the above.
 
-5. **More digit templates.** Only "1" and "2" have the fast pixel-match
+7. **More digit templates.** Only "1" and "2" have the fast pixel-match
    path today, on the assumption (confirmed by the user's play
    experience) that augment deltas are always ±1 or ±2. Only becomes
    necessary if a higher delta is ever actually observed live --
    reactive work, not proactive.
 
-6. **Self-calibrating OCR thresholds.** `BRIGHT_THRESHOLD`,
+8. **Self-calibrating OCR thresholds.** `BRIGHT_THRESHOLD`,
    `MIN_MATCH_SCORE`, `INDICATOR_AMBIGUOUS_WIDTH_FRACTION`, and similar
    constants are all tuned against captures from one machine's display.
    A future monitor with different gamma/brightness could need
@@ -124,10 +167,10 @@ worth prioritizing over the above.
    cross-machine -- worth revisiting only if a beta tester's failures
    look threshold-related.
 
-7. **A sound or system notification on accept**, so a long unattended
+9. **A sound or system notification on accept**, so a long unattended
    run doesn't require watching the terminal to notice it finished.
 
-8. **Code signing.** Removes the Gatekeeper/SmartScreen warnings
+10. **Code signing.** Removes the Gatekeeper/SmartScreen warnings
    entirely. Costs real money (~$100-400/yr depending on platform) and
    isn't a code change -- a project/budget decision, not engineering
    work.

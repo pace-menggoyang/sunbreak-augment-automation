@@ -6,6 +6,84 @@ project doesn't yet follow strict semantic versioning (it's still beta).
 
 ## [Unreleased]
 
+## [0.1.6-beta] -- 2026-11-09
+
+Fixes for every unreadable-roll failure found in a Windows beta tester's
+logs (157 runs, ~158,000 attempts, 35 runs that ended on an
+`UnreadableRollError`), plus an end-of-run summary and experimental speed
+presets. The beta exe predated all of this -- rebuild/redownload to get it.
+
+- Fix: a game dialog sitting on top of the skill rows ended runs that could
+  have carried on. 17 of the 35 failures were one of these -- the pre-roll
+  "Requires materials... Proceed?" confirm, a stray "Apply results?", or a
+  server "A communication error has occurred" -- not an OCR problem at all:
+  the rows read as unreadable on all 8 retries of a screen that could never
+  change. The bot now recognizes the dialog on the first unreadable read and
+  dismisses it, then re-reads the same roll: Cancel for "Apply results?"
+  (never applies anything), Confirm for the other two. It gives up after 3
+  in a row. "Continue Augmenting armor?" is recognized too, but deliberately
+  not dismissed -- it only appears after an apply/reject has already
+  happened, so the key sequence is out of step and a blind Confirm would
+  carry on from an unknown state; the run stops with a clear message
+  instead.
+- Fix: **Artillery in the first row of a multi-page roll could never be
+  read** (14 of the 16 genuine OCR failures; 0 successful reads in the
+  logs vs 330 on single-page rolls). That row's name box also catches the
+  skill's icon, and a short name like "Artillery" gets read as `mr eay` on
+  every retry. A name that doesn't match any skill is now re-read once with
+  the leading icon stripped (found structurally -- the first column run that
+  doesn't reach the text's top line -- not by a pixel offset). Only runs
+  after a failed match, so a normal read pays nothing. Rows that needed it
+  are tagged `name:icon-stripped` in the debug log.
+- Fix: a sparkle sitting on a green "1" made Tesseract guess, and it guessed
+  "4" in 4 of 17 replayed failures. When sparkle pixels are present, the
+  color-cleaned template match is now tried first (it read "1" in all 17).
+- Fix: impossible digits are no longer taken at face value. A skill's delta
+  is only ever 1 or 2, yet 2.4% of gain reads (2,299 of 94,219) came out
+  higher (stray +4/+5/+7). Such a Tesseract result is now skipped in favor
+  of the other recognition modes and the sparkle recovery. If nothing
+  plausible turns up the read is kept but tagged `!` in the debug log,
+  rather than made unreadable -- a misread that repeats on every retry
+  would otherwise stop the whole run.
+- Perf: the page-indicator retry count drops from 8 to 2. Across ~28,000
+  ambiguous episodes a retry only ever produced a parsed indicator within
+  the first 2; the 842 that went further never did, and the 818 that spent
+  all 8 cost ~2.4s each for nothing (~3% of total run time).
+- Feature: an end-of-run summary, printed and written to the debug log
+  however the run ends (accepted, gave up, force-stopped, or dying on an
+  unreadable roll): attempts and rate, how each digit and name was read,
+  implausible digits, page and indicator retries, dialogs dismissed, and the
+  speed preset used. It is what the next bug report should quote.
+- Feature: the key delay widens automatically after a stray dialog. Dismissing
+  "Proceed?" or "Apply results?" means a key landed mid-transition, so the
+  delay between key presses goes up 25% (capped at 2x the configured value).
+  A server error doesn't change it -- that isn't a timing problem.
+- Feature (experimental): **speed presets**, from the interactive menu's new
+  **Speed** entry or `--speed {normal,safe,fast}` / `--fast`. An attempt
+  takes ~2.0s, of which the 7 key presses are ~1.5s and the 0.5s settle
+  wait before reading is 0.5s.
+  - *Faster* (`safe`): settle wait 0.5s -> 0.2s, ~17% faster. Only changes
+    when the first screenshot is taken, so it can't desync the game -- an
+    unfaded sparkle just triggers the existing re-read.
+  - *Fast* (`fast`, experimental): also key delay 0.18s -> 0.12s, ~55%
+    faster, but a key can land mid-transition. Key hold stays 0.03s since
+    nothing below that was ever measured. It slows itself down on a stray
+    dialog (never past the normal delay) and switches itself back to normal
+    for the rest of the run after 3 of them. Validate it with
+    `--max-attempts 10-20` first.
+  The speed-up figures are estimates from the logs' timings, not a live
+  measurement. Explicit `--press-hold`/`--post-press-delay`/`--settle-delay`
+  still override a preset.
+- Diagnostics: a page indicator that stays unresolved after its retries is
+  logged as `UNRESOLVED` and the first few screenshots are saved to `logs/`
+  (`indicator_unresolved_*`). Those fall back to the single-page layout and
+  read back all-blank 98% of the time (803 of 818, vs 17% for ordinary
+  single-page rolls), so they are probably real multi-page rolls being read
+  with the wrong layout and rejected as empty -- but the cause is
+  unconfirmed because no screenshot of one was ever saved. **Still open**;
+  if you see these files, please attach them to a bug report
+  (`package-failure` picks them up).
+
 ## [0.1.5-beta] -- 2026-08-25
 
 - Perf (Windows): the download shrinks from a 91.6MB zip (two ~46MB
