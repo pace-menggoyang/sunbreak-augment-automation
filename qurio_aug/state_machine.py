@@ -240,6 +240,8 @@ def _confidence_tags(row: ocr.ParsedRow) -> str:
         tags.append(row.digit_source)
     if row.debridge != "none":
         tags.append(f"debridged:{row.debridge}")
+    if row.name_source:
+        tags.append(f"name:{row.name_source}")
     return f" [{', '.join(tags)}]" if tags else ""
 
 

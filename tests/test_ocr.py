@@ -162,7 +162,11 @@ def test_debridged_digit_reads_correctly_end_to_end():
     y1 = min(img.height, value_bbox[3] + ocr.DIGIT_CROP_PADDING)
     digit_text, source = ocr._ocr_single_digit(img.crop((x0, y0, x1, y1)))
     assert digit_text == "1"
-    assert source in ("template", "tesseract:psm8", "tesseract:psm7", "tesseract:psm6", "tesseract:psm10")
+    # "sparkle-recovery": this crop has sparkle pixels on it, so the color-
+    # cleaned template match is now tried before any Tesseract guess.
+    assert source in (
+        "template", "sparkle-recovery", "tesseract:psm8", "tesseract:psm7", "tesseract:psm6", "tesseract:psm10",
+    )
 
 
 # --- Community-reported bug: a "Lv +1" gain never resolving across all 8
@@ -554,6 +558,61 @@ def test_get_tesserocr_api_returns_none_when_module_unavailable():
         assert ocr._get_tesserocr_api() is None
     finally:
         ocr.tesserocr = original
+
+
+# --- Artillery row-0 name misread (multi-page layout): the skill icon at the
+# bottom-left of the name box made Tesseract read 'mr eay' on every retry. ---
+
+
+def test_strip_leading_icon_removes_the_icon_from_a_short_name():
+    img = Image.open(FIXTURES / "name_crop_artillery_with_icon.png")
+    stripped = ocr._strip_leading_icon(img)
+    assert stripped is not None
+    before = ocr._bright_bbox(img)
+    after = ocr._bright_bbox(stripped)
+    # The icon (~25px) is gone and only the name's text remains.
+    assert (after[2] - after[0]) < (before[2] - before[0]) - 15
+
+
+def test_strip_leading_icon_is_a_noop_once_the_icon_is_gone():
+    img = Image.open(FIXTURES / "name_crop_artillery_with_icon.png")
+    stripped = ocr._strip_leading_icon(img)
+    # The name's first letter reaches the top line, so nothing more to strip.
+    assert ocr._strip_leading_icon(stripped) is None
+
+
+def test_strip_leading_icon_none_for_blank_crop():
+    assert ocr._strip_leading_icon(Image.new("RGB", (60, 20))) is None
+
+
+def test_icon_stripped_name_reads_as_artillery():
+    img = Image.open(FIXTURES / "name_crop_artillery_with_icon.png")
+    text, _ = ocr._ocr_content(ocr._strip_leading_icon(img), ocr._NAME_CONFIG)
+    skill, _score = ocr.match_skill_name(text)
+    assert skill is not None and skill.name == "Artillery"
+
+
+# --- Sparkled "1": Tesseract psm8 guesses "4"; the color-cleaned template
+# match reads "1" and should win whenever sparkle pixels are present. ---
+
+
+def test_has_sparkle_pixels_true_for_sparkled_digit_false_for_clean_one():
+    assert ocr._has_sparkle_pixels(Image.open(FIXTURES / "digit_crop_sparkled_one_tesseract_reads_4.png"))
+    assert not ocr._has_sparkle_pixels(Image.open(FIXTURES / "digit_1_sample.png"))
+
+
+def test_sparkled_one_prefers_cleaned_template_over_tesseract_guess():
+    img = Image.open(FIXTURES / "digit_crop_sparkled_one_tesseract_reads_4.png")
+    original = ocr._run_tesseract
+
+    def explode(*a, **kw):
+        raise AssertionError("tesseract must not be consulted when the cleaned template match succeeds")
+
+    ocr._run_tesseract = explode
+    try:
+        assert ocr._ocr_single_digit(img) == ("1", "sparkle-recovery")
+    finally:
+        ocr._run_tesseract = original
 
 
 def run_all():

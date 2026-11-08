@@ -571,6 +571,17 @@ def _ocr_single_digit(img: Image.Image) -> tuple[str, str]:
     if template_match is not None:
         return template_match, "template"
 
+    # A sparkle on the digit makes Tesseract *guess*, and it guesses wrong:
+    # replaying the Windows beta's saved failures, psm8 read a sparkled
+    # green "1" as "4" in 4 of 17 cases (and live logs show stray +4/+5/+7
+    # reads), while the color-cleaned template match read "1" in all 17. So
+    # when sparkle pixels are present, try that deterministic match first
+    # and only fall through to Tesseract if it declines.
+    if _has_sparkle_pixels(img):
+        recovered = _recover_sparkle_contaminated_digit(img)
+        if recovered:
+            return recovered, "sparkle-recovery"
+
     upscaled = _upscale(img, DIGIT_UPSCALE)
     for psm in _DIGIT_PSM_MODES:
         candidate = _run_tesseract(upscaled, config=f"--psm {psm} {_DIGIT_WHITELIST}")
@@ -578,6 +589,21 @@ def _ocr_single_digit(img: Image.Image) -> tuple[str, str]:
             return candidate, f"tesseract:psm{psm}"
     recovered = _recover_sparkle_contaminated_digit(img)
     return recovered, ("sparkle-recovery" if recovered else "")
+
+
+def _has_sparkle_pixels(img: Image.Image) -> bool:
+    """True if the crop has any bright pixel that isn't a green digit
+    stroke -- i.e. a sparkle is sitting on (or next to) the digit. A clean
+    crop returns False, so the color-cleaned match below never applies to
+    it.
+    """
+    rgb = img.convert("RGB")
+    px = rgb.load()
+    w, h = rgb.size
+    return any(
+        max(px[x, y]) > BRIGHT_THRESHOLD and not _is_green_digit_pixel(*px[x, y])
+        for y in range(h) for x in range(w)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -592,6 +618,7 @@ class RawRow:
     digit_source: str = ""  # "template" | "tesseract:psmN" | "sparkle-recovery" | "" (no digit attempted)
     debridge: str = "none"  # "none" | "color" | "brightness" -- see read_row
     value_source: str = ""  # "color" | "tesseract" | "" (blank slot) -- see _classify_value_fast
+    name_source: str = ""  # "" | "icon-stripped" -- see _strip_leading_icon
 
 
 def select_digit_run(
@@ -832,11 +859,62 @@ def _classify_value_fast(value_crop: Image.Image, bbox: tuple[int, int, int, int
     return None  # color or structure landed in a dead zone -- fall back to Tesseract
 
 
+# A leading column run only counts as the skill's icon (rather than the
+# name's first letter) if its top sits this far below the text's top line,
+# as a fraction of the content's height. Capital letters reach the top;
+# the icon sits at the bottom-left of the name box, below the baseline.
+NAME_ICON_TOP_FRACTION = 0.25
+
+
+def _strip_leading_icon(name_crop: Image.Image) -> Image.Image | None:
+    """Returns name_crop with a leading skill icon cut off, or None if
+    there's no icon to strip.
+
+    Confirmed live: in the multi-page layout, row 0's name box also catches
+    the skill's icon (bottom-left of the box). A long name tolerates it,
+    but a short one like "Artillery" (105px wide vs ~200 for the others)
+    makes the icon a big enough share of the crop that Tesseract reads
+    'mr eay' -- identically on every retry, so 14 of the 16 genuine
+    unreadable-roll failures in the beta logs were this one row.
+
+    Detected structurally, not by a pixel offset: the icon is the first
+    column run, and unlike a name's capital first letter it never reaches
+    the top line of the text.
+    """
+    bbox = _bright_bbox(name_crop)
+    if bbox is None:
+        return None
+    runs = _column_runs(name_crop, bbox)
+    if len(runs) < 2:
+        return None
+    px = name_crop.convert("RGB").load()
+    _, top, _, bottom = bbox
+    limit = top + (bottom - top) * NAME_ICON_TOP_FRACTION
+    for index, (start, end) in enumerate(runs):
+        run_top = next(
+            (y for y in range(top, bottom) if any(max(px[x, y]) > BRIGHT_THRESHOLD for x in range(start, end))),
+            None,
+        )
+        if run_top is not None and run_top <= limit:
+            if index == 0:
+                return None  # the first run already reaches the top: no icon prefix
+            return name_crop.crop((max(0, start - 2), 0, name_crop.width, name_crop.height))
+    return None
+
+
 def read_row(screenshot: Image.Image, row: RowRegions) -> RawRow:
     name_crop = _crop_fraction(screenshot, row.name_box)
     value_crop = _crop_fraction(screenshot, row.value_box)
 
     name_text, _ = _ocr_content(name_crop, _NAME_CONFIG)
+    name_source = ""
+    # Only on a failed match, so the normal path pays nothing for this.
+    if match_skill_name(name_text)[0] is None:
+        stripped = _strip_leading_icon(name_crop)
+        if stripped is not None:
+            retry_text, _ = _ocr_content(stripped, _NAME_CONFIG)
+            if match_skill_name(retry_text)[0] is not None:
+                name_text, name_source = retry_text, "icon-stripped"
 
     value_bbox = _bright_bbox(value_crop)
     value_source = ""
@@ -902,6 +980,7 @@ def read_row(screenshot: Image.Image, row: RowRegions) -> RawRow:
         digit_source=digit_source,
         debridge=debridge,
         value_source=value_source,
+        name_source=name_source,
     )
 
 
@@ -932,6 +1011,7 @@ class ParsedRow:
     digit_source: str = ""
     debridge: str = "none"
     value_source: str = ""
+    name_source: str = ""  # carried through from RawRow, for debug logging only
 
 
 def parse_row(raw: RawRow) -> ParsedRow:
@@ -954,12 +1034,12 @@ def parse_row(raw: RawRow) -> ParsedRow:
     if skill is None or (not removed and delta is None):
         return ParsedRow(skill=None, blank=False, unparseable=True,
                           digit_source=raw.digit_source, debridge=raw.debridge,
-                          value_source=raw.value_source)
+                          value_source=raw.value_source, name_source=raw.name_source)
 
     result = SkillResult(name=skill.name, delta=delta or 0, removed=removed)
     return ParsedRow(skill=result, blank=False, unparseable=False,
                       digit_source=raw.digit_source, debridge=raw.debridge,
-                      value_source=raw.value_source)
+                      value_source=raw.value_source, name_source=raw.name_source)
 
 
 # Lazily created, reused for every read_page call rather than one
