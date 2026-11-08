@@ -83,13 +83,26 @@ UNREADABLE_RETRY_DELAY = 0.25
 # template. Confirmed live: a genuinely two-page roll's row0 landed
 # squarely on the "Skills" section header, because first_of_multi's rows
 # sit further down than single_page's to make room for an indicator the
-# code had already decided didn't exist. Same retry cadence as
-# UNREADABLE_RETRY_COUNT/DELAY -- only spent when
+# code had already decided didn't exist. Only spent when
 # ocr.indicator_region_ambiguous flags real content that didn't parse,
 # not on every attempt, so a genuinely single-page roll (the common case)
 # isn't taxed for a check it doesn't need.
-INDICATOR_RETRY_COUNT = 8
+#
+# Capped at 2 retries, down from 8, on the evidence of ~28,000 ambiguous
+# episodes in the Windows beta logs (157 runs): a retry only ever produced
+# a parsed indicator within the first 2 (81 episodes: 49 on the 1st, 32 on
+# the 2nd) -- the 842 episodes that went past 2 retries never did, and the
+# 818 that burned all 8 cost ~2.4s each for nothing.
+INDICATOR_RETRY_COUNT = 2
 INDICATOR_RETRY_DELAY = 0.25
+
+# An indicator that's still ambiguous after every retry falls back to the
+# single_page layout, which in the beta logs read back all-blank 98% of the
+# time (803 of 818, vs a 17% baseline for ordinary single-page rolls) --
+# i.e. most of these are probably real multi-page rolls being read with the
+# wrong template and silently rejected as empty. Root cause unconfirmed
+# (no screenshot of one was ever saved), so capture a few for diagnosis.
+MAX_UNRESOLVED_INDICATOR_DUMPS = 5
 
 MAX_PAGES = 3
 MAX_ATTEMPTS_DEFAULT = 300
@@ -226,7 +239,40 @@ def _detect_page_indicator(
         game.park_mouse(window_bounds)
         screenshot = screenshot_fn()
         indicator = ocr.read_page_indicator(screenshot, region_config)
+    if indicator is None and ocr.indicator_region_ambiguous(screenshot, region_config):
+        debug_log(
+            "page indicator: UNRESOLVED after retries -- falling back to the single_page layout, "
+            "which may be the wrong template for this roll"
+        )
+        _dump_unresolved_indicator(screenshot, region_config, debug_log)
     return screenshot, indicator
+
+
+_unresolved_indicator_dumps = 0
+
+
+def _dump_unresolved_indicator(
+    screenshot: Image.Image, region_config: ocr.RegionConfig, debug_log: Callable[[str], None],
+) -> None:
+    """Saves the full screenshot and the indicator crop for the first few
+    unresolved-indicator cases of a process, so the cause can finally be
+    diagnosed from real pixels (see MAX_UNRESOLVED_INDICATOR_DUMPS).
+    Best-effort: a failure to write never interrupts a run.
+    """
+    global _unresolved_indicator_dumps
+    if _unresolved_indicator_dumps >= MAX_UNRESOLVED_INDICATOR_DUMPS:
+        return
+    _unresolved_indicator_dumps += 1
+    try:
+        LOG_DIR.mkdir(exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
+        full = LOG_DIR / f"indicator_unresolved_{stamp}_full.png"
+        crop = LOG_DIR / f"indicator_unresolved_{stamp}_indicator.png"
+        screenshot.save(full)
+        ocr._upscale(ocr._crop_fraction(screenshot, region_config.page_indicator_box)).save(crop)
+        debug_log(f"page indicator: saved {full} for inspection")
+    except OSError:
+        pass
 
 
 def _confidence_tags(row: ocr.ParsedRow) -> str:

@@ -150,6 +150,14 @@ _VALUE_TEXT_CONFIG = "--psm 7"
 # missed, and separately a clean "2" that only 6/7/10 (not 8) could read. So
 # a single digit is read by trying each in turn and taking the first clean
 # single-digit result, rather than trusting one mode.
+# A skill's delta is only ever 1 or 2 in practice (confirmed by play
+# experience -- see docs/roadmap.md #5). In the Windows beta logs 2.4% of
+# all gain reads (2,299 of 94,219) came out above that -- stray +4/+5/+7
+# that are Tesseract misreading a "1" -- and were being accepted as real.
+# _ocr_single_digit skips a candidate above this and keeps looking; read_row
+# passes it for value digits (the page indicator's digits don't use it).
+MAX_PLAUSIBLE_DELTA = 2
+
 _DIGIT_PSM_MODES = (8, 7, 6, 10)
 _DIGIT_WHITELIST = "-c tessedit_char_whitelist=0123456789"
 
@@ -535,7 +543,7 @@ def _recover_sparkle_contaminated_digit(img: Image.Image) -> str:
     return _template_match_digit(retightened, min_score=SPARKLE_RECOVERY_MATCH_THRESHOLD) or ""
 
 
-def _ocr_single_digit(img: Image.Image) -> tuple[str, str]:
+def _ocr_single_digit(img: Image.Image, max_digit: int = 9) -> tuple[str, str]:
     """Read a tight crop expected to contain exactly one digit.
 
     Tries a fast pixel template match first (see _template_match_digit) --
@@ -583,12 +591,27 @@ def _ocr_single_digit(img: Image.Image) -> tuple[str, str]:
             return recovered, "sparkle-recovery"
 
     upscaled = _upscale(img, DIGIT_UPSCALE)
+    implausible: tuple[str, str] | None = None
     for psm in _DIGIT_PSM_MODES:
         candidate = _run_tesseract(upscaled, config=f"--psm {psm} {_DIGIT_WHITELIST}")
         if len(candidate) == 1 and candidate.isdigit():
+            if int(candidate) > max_digit:
+                # Above max_digit (see MAX_PLAUSIBLE_DELTA): a misread --
+                # remember it, but let the remaining modes and the
+                # sparkle recovery try for a plausible digit first.
+                implausible = implausible or (candidate, f"tesseract:psm{psm}!")
+                continue
             return candidate, f"tesseract:psm{psm}"
     recovered = _recover_sparkle_contaminated_digit(img)
-    return recovered, ("sparkle-recovery" if recovered else "")
+    if recovered:
+        return recovered, "sparkle-recovery"
+    # Nothing plausible turned up. Keep the implausible read (tagged "!"
+    # in the debug log) instead of returning "": that would make the row
+    # unreadable, and a misread that repeats identically on every retry
+    # would then stop the whole run -- at ~1% of attempts, far worse than
+    # the status quo, with no corpus of these crops yet to prove the
+    # alternatives above resolve them. The tag makes them countable.
+    return implausible or ("", "")
 
 
 def _has_sparkle_pixels(img: Image.Image) -> bool:
@@ -970,7 +993,9 @@ def read_row(screenshot: Image.Image, row: RowRegions) -> RawRow:
                 x1 = min(value_crop.width, digit_run[1] + DIGIT_CROP_PADDING)
                 y0 = max(0, value_bbox[1] - DIGIT_CROP_PADDING)
                 y1 = min(value_crop.height, value_bbox[3] + DIGIT_CROP_PADDING)
-                digit_text, digit_source = _ocr_single_digit(value_crop.crop((x0, y0, x1, y1)))
+                digit_text, digit_source = _ocr_single_digit(
+                    value_crop.crop((x0, y0, x1, y1)), max_digit=MAX_PLAUSIBLE_DELTA,
+                )
 
     return RawRow(
         name_text=name_text,

@@ -615,6 +615,59 @@ def test_sparkled_one_prefers_cleaned_template_over_tesseract_guess():
         ocr._run_tesseract = original
 
 
+# --- Implausible digits: a skill delta is only ever 1 or 2, so a Tesseract
+# "7"/"5" is a misread of a "1" -- keep looking before accepting it. ---
+
+
+def _with_fake_tesseract(by_psm, recovered, fn):
+    """Runs fn() with the template match declining, _run_tesseract answering
+    per --psm from `by_psm`, and the sparkle recovery returning `recovered`."""
+    saved = (ocr._template_match_digit, ocr._run_tesseract, ocr._recover_sparkle_contaminated_digit)
+
+    def fake_tesseract(image, config):
+        psm = int(config.split("--psm ")[1].split()[0])
+        return by_psm.get(psm, "")
+
+    ocr._template_match_digit = lambda *a, **kw: None
+    ocr._run_tesseract = fake_tesseract
+    ocr._recover_sparkle_contaminated_digit = lambda *a, **kw: recovered
+    try:
+        return fn()
+    finally:
+        ocr._template_match_digit, ocr._run_tesseract, ocr._recover_sparkle_contaminated_digit = saved
+
+
+def test_implausible_digit_is_skipped_for_a_later_psm_mode():
+    img = Image.new("RGB", (17, 31))
+    # psm8 blank, psm7 says "7" (impossible), psm6 says "1".
+    result = _with_fake_tesseract({7: "7", 6: "1"}, "", lambda: ocr._ocr_single_digit(img, max_digit=2))
+    assert result == ("1", "tesseract:psm6")
+
+
+def test_implausible_digit_falls_through_to_sparkle_recovery():
+    img = Image.new("RGB", (17, 31))
+    result = _with_fake_tesseract({7: "7"}, "1", lambda: ocr._ocr_single_digit(img, max_digit=2))
+    assert result == ("1", "sparkle-recovery")
+
+
+def test_implausible_digit_kept_and_tagged_when_nothing_better_exists():
+    # Deliberately NOT turned into "" (unreadable): a misread that repeats on
+    # every retry would otherwise stop the whole run.
+    img = Image.new("RGB", (17, 31))
+    result = _with_fake_tesseract({7: "7"}, "", lambda: ocr._ocr_single_digit(img, max_digit=2))
+    assert result == ("7", "tesseract:psm7!")
+
+
+def test_default_max_digit_still_allows_any_digit_for_the_page_indicator():
+    img = Image.new("RGB", (17, 31))
+    result = _with_fake_tesseract({8: "3"}, "", lambda: ocr._ocr_single_digit(img))
+    assert result == ("3", "tesseract:psm8")  # "1/3" pages must keep working
+
+
+def test_value_digits_use_the_plausible_delta_cap():
+    assert ocr.MAX_PLAUSIBLE_DELTA == 2
+
+
 def run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_")]
     failures = 0

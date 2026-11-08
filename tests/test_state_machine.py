@@ -620,12 +620,44 @@ def test_ambiguous_indicator_that_never_resolves_falls_back_to_single_page(monke
         ocr, "read_page", lambda screenshot, template: [_row("Artillery"), _row("Diversion"), _blank()],
     )
     monkeypatch.setattr(state_machine.time, "sleep", lambda seconds: None)
+    tmp = Path(tempfile.mkdtemp())
+    monkeypatch.setattr(state_machine, "LOG_DIR", tmp)
+    monkeypatch.setattr(state_machine, "_unresolved_indicator_dumps", 0)
 
     game = FakeGame()
     results = state_machine.read_full_roll(
         lambda: _FAKE_SCREENSHOT, game, DUMMY_REGION_CONFIG, DUMMY_WINDOW_BOUNDS, _goal(),
     )
     assert [r.name for r in results] == ["Artillery", "Diversion"]
+
+
+def test_unresolved_indicator_retries_only_twice_and_saves_a_screenshot(monkeypatch):
+    calls = {"n": 0}
+
+    def indicator_fn(screenshot, region_config):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(ocr, "read_page_indicator", indicator_fn)
+    monkeypatch.setattr(ocr, "indicator_region_ambiguous", lambda screenshot, region_config: True)
+    monkeypatch.setattr(ocr, "read_page", lambda screenshot, template: [_blank(), _blank(), _blank()])
+    monkeypatch.setattr(state_machine.time, "sleep", lambda seconds: None)
+    tmp = Path(tempfile.mkdtemp())
+    monkeypatch.setattr(state_machine, "LOG_DIR", tmp)
+    monkeypatch.setattr(state_machine, "_unresolved_indicator_dumps", 0)
+
+    logged = []
+    for _ in range(state_machine.MAX_UNRESOLVED_INDICATOR_DUMPS + 3):
+        state_machine.read_full_roll(
+            lambda: _FAKE_SCREENSHOT, FakeGame(), DUMMY_REGION_CONFIG, DUMMY_WINDOW_BOUNDS, _goal(),
+            debug_log=logged.append,
+        )
+    # 1 initial read + 2 retries per call, not 1 + 8.
+    assert calls["n"] == (state_machine.MAX_UNRESOLVED_INDICATOR_DUMPS + 3) * (1 + state_machine.INDICATOR_RETRY_COUNT)
+    assert state_machine.INDICATOR_RETRY_COUNT == 2
+    assert any("UNRESOLVED" in m for m in logged)
+    # Screenshots are capped so a long run can't fill the disk.
+    assert len(list(tmp.glob("indicator_unresolved_*_full.png"))) == state_machine.MAX_UNRESOLVED_INDICATOR_DUMPS
 
 
 # --- Force-stop hotkey support (see hotkeys.py): should_stop is checked
