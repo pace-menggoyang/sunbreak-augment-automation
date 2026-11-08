@@ -76,6 +76,12 @@ class FakeGame:
     def confirm(self):
         self.confirm_calls += 1
 
+    slowdown_calls = 0
+
+    def slow_down(self):
+        self.slowdown_calls += 1
+        return (0.18, 0.225)
+
     def cancel(self):
         self.cancel_calls += 1
 
@@ -938,6 +944,87 @@ def test_continue_augmenting_dialog_is_not_dismissed_automatically(monkeypatch):
     assert err.kind == ocr.DIALOG_CONTINUE
     assert "out of step" in str(err)
     assert (game.confirm_calls, game.cancel_calls) == (0, 0)  # no key was pressed
+
+
+# --- Auto-slowdown after a stray dialog, and the end-of-run summary. ---
+
+
+def test_dismissing_a_timing_dialog_slows_the_key_delay_but_a_server_error_does_not(monkeypatch):
+    for kind, expect_slowdowns in [
+        (ocr.DIALOG_APPLY_RESULTS, 1),
+        (ocr.DIALOG_PROCEED, 1),
+        (ocr.DIALOG_ERROR, 0),  # a server error isn't a key-timing problem
+    ]:
+        game = FakeGame()
+        outcomes = [state_machine.UnexpectedDialogError(kind), [SkillResult("Artillery", delta=1)]]
+
+        def read():
+            out = outcomes.pop(0)
+            if isinstance(out, Exception):
+                raise out
+            return out
+
+        stats = state_machine.RunStats()
+        logged = []
+        state_machine._read_recovering_from_dialogs(read, game, logged.append, stats)
+        assert game.slowdown_calls == expect_slowdowns, kind
+        assert stats.dialogs[kind] == 1
+        assert (stats.delay_to is not None) == bool(expect_slowdowns)
+        assert any("key delay raised" in m for m in logged) == bool(expect_slowdowns)
+
+
+def _run_with_decisions(monkeypatch, decisions, entries=None):
+    game = FakeGame()
+    script = Script(monkeypatch, entries or [(None, [_row("Artillery"), _blank(), _blank()])], game=game)
+    monkeypatch.setattr(state_machine.capture, "find_game_window", lambda hint: SimpleNamespace(bounds=DUMMY_WINDOW_BOUNDS))
+    monkeypatch.setattr(state_machine.capture, "screenshot_window", lambda window: script.screenshot_fn())
+    monkeypatch.setattr(state_machine, "GameInput", lambda **kwargs: game)
+    original_logger_cls = state_machine.AttemptLogger
+    tmpdir = tempfile.TemporaryDirectory()
+    holder = {}
+
+    def make_logger(goal):
+        holder["log"] = original_logger_cls(goal=goal, log_dir=Path(tmpdir.name))
+        return holder["log"]
+
+    monkeypatch.setattr(state_machine, "AttemptLogger", make_logger)
+    if decisions is not None:
+        it = iter(decisions)
+        monkeypatch.setattr(state_machine, "evaluate", lambda goal, roll: next(it))
+    fake_out = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", fake_out)
+    return game, fake_out, holder, tmpdir
+
+
+def test_run_prints_and_logs_a_summary_when_it_finishes(monkeypatch):
+    game, fake_out, holder, tmpdir = _run_with_decisions(monkeypatch, [
+        Decision(False, "goal not met", [SkillResult("Artillery", delta=1)], []),
+        Decision(True, "matched profile", [SkillResult("Artillery", delta=1)], []),
+    ])
+    try:
+        result = state_machine.run(_goal(), region_config=DUMMY_REGION_CONFIG, max_attempts=5)
+        debug_text = holder["log"]._debug_path.read_text()
+    finally:
+        tmpdir.cleanup()
+    assert result.accepted
+    assert "Run summary: 2 attempt(s)" in fake_out.getvalue()
+    assert "Run summary: 2 attempt(s)" in debug_text  # also lands in the debug log, for bug reports
+
+
+def test_run_still_prints_a_summary_when_it_dies_on_an_unreadable_roll(monkeypatch):
+    game, fake_out, holder, tmpdir = _run_with_decisions(
+        monkeypatch, None, entries=[(None, [_unparseable(), _blank(), _blank()])],
+    )
+    try:
+        _expect_error(
+            lambda: state_machine.run(_goal(), region_config=DUMMY_REGION_CONFIG, max_attempts=5),
+            state_machine.UnreadableRollError,
+        )
+    finally:
+        tmpdir.cleanup()
+    output = fake_out.getvalue()
+    assert "Run summary" in output
+    assert f"page reads {state_machine.UNREADABLE_RETRY_COUNT}" in output  # the retries it burned
 
 
 def run_all():

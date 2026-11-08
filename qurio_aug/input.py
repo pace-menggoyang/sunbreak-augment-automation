@@ -53,6 +53,15 @@ MOUSE_PARK_FRACTION = (0.02, 0.97)
 PRESS_HOLD = 0.03
 POST_PRESS_DELAY = 0.18
 
+# When state_machine has to dismiss a stray dialog (a key landed mid-
+# transition -- exactly what POST_PRESS_DELAY guards against), it asks
+# GameInput.slow_down() to widen the delay a little so the loop adapts to a
+# slow moment or a laggy game instead of recovering again and again at the
+# same speed. Capped at this multiple of the configured delay so a run can
+# never drift unboundedly slow.
+SLOWDOWN_STEP = 1.25
+MAX_SLOWDOWN_FACTOR = 2.0
+
 _KEY_MAP = {
     "confirm": "f",
     "cancel": Key.esc,
@@ -74,6 +83,7 @@ class GameInput:
                  should_stop: Callable[[], bool] | None = None):
         self._controller = controller or Controller()
         self._post_press_delay = post_press_delay
+        self._base_post_press_delay = post_press_delay
         self._press_hold = press_hold
         self._mouse = mouse or MouseController()
         # Checked before every keypress -- the finest-grained point to
@@ -81,6 +91,23 @@ class GameInput:
         # within one press's timing budget rather than running to
         # completion first.
         self._should_stop = should_stop or (lambda: False)
+
+    @property
+    def post_press_delay(self) -> float:
+        return self._post_press_delay
+
+    def slow_down(self) -> tuple[float, float] | None:
+        """Raises the post-press delay by SLOWDOWN_STEP, up to
+        MAX_SLOWDOWN_FACTOR x the delay it was created with. Returns
+        (old, new), or None if it's already at the cap (or the base delay
+        is 0, which a user can set deliberately).
+        """
+        cap = self._base_post_press_delay * MAX_SLOWDOWN_FACTOR
+        old = self._post_press_delay
+        if old >= cap:
+            return None
+        self._post_press_delay = min(cap, old * SLOWDOWN_STEP)
+        return old, self._post_press_delay
 
     def park_mouse(self, window_bounds: tuple[float, float, float, float]) -> None:
         """Move the cursor to a safe corner of the game window, clear of

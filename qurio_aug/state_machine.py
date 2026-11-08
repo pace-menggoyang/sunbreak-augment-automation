@@ -22,6 +22,7 @@ from qurio_aug.decision import Decision, Goal, SkillResult, any_profile_reachabl
 from qurio_aug.hotkeys import StopRequested
 from qurio_aug.input import POST_PRESS_DELAY, PRESS_HOLD, GameInput
 from qurio_aug.logger import AttemptLogger
+from qurio_aug.run_stats import RunStats
 
 # Granularity for _interruptible_sleep -- long waits (settle delay, retry
 # backoff) are broken into chunks this size so a force-stop hotkey (see
@@ -131,6 +132,12 @@ _DIALOG_LABELS = {
 # from an unknown state -- stop and let the user look instead.
 _UNRECOVERABLE_DIALOGS = frozenset({ocr.DIALOG_CONTINUE})
 
+# Dialogs that mean a key landed mid-transition -- the failure POST_PRESS_DELAY
+# exists to prevent -- so dismissing one also widens the key delay a notch
+# (see GameInput.slow_down). A server error isn't a timing problem, and
+# "Continue Augmenting" stops the run before this is reached.
+_TIMING_DIALOGS = frozenset({ocr.DIALOG_PROCEED, ocr.DIALOG_APPLY_RESULTS})
+
 # How many dialogs in a row run() will dismiss while re-reading the same
 # attempt before giving up -- a dialog that keeps coming back means
 # something else is wrong (server down, game desynced) and blindly
@@ -216,6 +223,7 @@ def _detect_page_indicator(
     region_config: ocr.RegionConfig,
     should_stop: Callable[[], bool],
     debug_log: Callable[[str], None],
+    stats: RunStats | None = None,
 ) -> tuple[Image.Image, tuple[int, int] | None]:
     """Reads the page indicator from `screenshot`, retrying with fresh
     captures if the indicator box has content that looks like a real
@@ -234,12 +242,16 @@ def _detect_page_indicator(
         and retries < INDICATOR_RETRY_COUNT
     ):
         retries += 1
+        if stats is not None:
+            stats.indicator_retries += 1
         debug_log(f"page indicator: ambiguous (content present but unparsed), retry {retries}/{INDICATOR_RETRY_COUNT}")
         _interruptible_sleep(INDICATOR_RETRY_DELAY, should_stop)
         game.park_mouse(window_bounds)
         screenshot = screenshot_fn()
         indicator = ocr.read_page_indicator(screenshot, region_config)
     if indicator is None and ocr.indicator_region_ambiguous(screenshot, region_config):
+        if stats is not None:
+            stats.indicator_unresolved += 1
         debug_log(
             "page indicator: UNRESOLVED after retries -- falling back to the single_page layout, "
             "which may be the wrong template for this roll"
@@ -321,6 +333,7 @@ def _read_page_rows(
     region_config: ocr.RegionConfig | None = None,
     expected_page: int | None = None,
     debug_log: Callable[[str], None] = lambda msg: None,
+    stats: RunStats | None = None,
 ) -> list[ocr.ParsedRow]:
     """Reads one page, retrying with a fresh capture if a row comes back
     unparseable -- most commonly caused by the "newly changed" sparkle
@@ -407,6 +420,8 @@ def _read_page_rows(
         and retries < UNREADABLE_RETRY_COUNT
     ):
         retries += 1
+        if stats is not None:
+            stats.page_retries += 1
         debug_log(f"{page_label}: retry {retries}/{UNREADABLE_RETRY_COUNT}")
         _interruptible_sleep(UNREADABLE_RETRY_DELAY, should_stop)
         screenshot, page, bad_indicator = _capture()
@@ -451,6 +466,8 @@ def _read_page_rows(
             f"a skill row still couldn't be parsed after {UNREADABLE_RETRY_COUNT} "
             "retries -- refusing to guess. Saved for inspection:\n  " + saved_list
         )
+    if stats is not None:
+        stats.record_page(page)
     return page
 
 
@@ -467,6 +484,7 @@ def read_full_roll(
     settle_delay: float = RESULT_SETTLE_DELAY,
     should_stop: Callable[[], bool] = lambda: False,
     debug_log: Callable[[str], None] = lambda msg: None,
+    stats: RunStats | None = None,
 ) -> list[SkillResult]:
     """Pages through the skill list (Q/E) reading pages until either
     everything decision-relevant has been seen, or a page 2+ read can be
@@ -555,13 +573,14 @@ def read_full_roll(
     screenshot = screenshot_fn()
 
     screenshot, indicator = _detect_page_indicator(
-        screenshot, screenshot_fn, game, window_bounds, region_config, should_stop, debug_log,
+        screenshot, screenshot_fn, game, window_bounds, region_config, should_stop, debug_log, stats,
     )
     debug_log(f"page indicator: {indicator}")
     if indicator is None:
         page = _read_page_rows(
             screenshot_fn, region_config.row_templates["single_page"], game, window_bounds,
             goal.protected_skills, should_stop, region_config=region_config, debug_log=debug_log,
+            stats=stats,
         )
         results.extend(_page_skills(page))
         return results
@@ -583,6 +602,7 @@ def read_full_roll(
     page = _read_page_rows(
         screenshot_fn, region_config.row_templates["first_of_multi"], game, window_bounds,
         goal.protected_skills, should_stop, region_config=region_config, debug_log=debug_log,
+        stats=stats,
     )
     page1_results = _page_skills(page)
     results.extend(page1_results)
@@ -604,6 +624,7 @@ def read_full_roll(
                     screenshot_fn, region_config.row_templates["continuation"], game, window_bounds,
                     goal.protected_skills, should_stop,
                     region_config=region_config, expected_page=page_num, debug_log=debug_log,
+                    stats=stats,
                 )
                 page_results = _page_skills(page)
                 results.extend(page_results)
@@ -639,6 +660,7 @@ def _read_recovering_from_dialogs(
     read: Callable[[], list[SkillResult]],
     game: GameInput,
     debug_log: Callable[[str], None],
+    stats: RunStats | None = None,
 ) -> list[SkillResult]:
     """Runs `read`, dismissing a covering modal dialog (see
     _dismiss_dialog) and re-reading the same roll, up to
@@ -660,6 +682,14 @@ def _read_recovering_from_dialogs(
             recoveries += 1
             debug_log(f"dismissing dialog {e.kind} ({recoveries}/{MAX_DIALOG_RECOVERIES})")
             _dismiss_dialog(game, e.kind)
+            if stats is not None:
+                stats.dialogs[e.kind] += 1
+            if e.kind in _TIMING_DIALOGS:
+                slowed = game.slow_down()
+                if slowed is not None:
+                    debug_log(f"key delay raised {slowed[0]:.3f}s -> {slowed[1]:.3f}s after a stray dialog")
+                    if stats is not None:
+                        stats.record_slowdown(*slowed)
 
 
 @dataclass
@@ -749,6 +779,20 @@ def evaluate_current_screen(
     return decision
 
 
+def _emit_run_summary(stats: RunStats, log: AttemptLogger, elapsed: float) -> None:
+    """Prints the run summary and writes the same lines to the debug log,
+    so a bug report's log is self-explanatory. Skipped only for a run where
+    nothing at all happened -- one that dies on its very first attempt still
+    gets one, since the retries it burned are exactly what's worth seeing.
+    """
+    if log.attempt == 0 and not (stats.dialogs or stats.page_retries or stats.indicator_retries):
+        return
+    lines = stats.summary_lines(log.attempt, elapsed)
+    print("\n".join(lines))
+    for line in lines:
+        log.debug(line)
+
+
 def run(
     goal: Goal,
     *,
@@ -801,6 +845,7 @@ def run(
     live_progress = sys.stdout.isatty()
     dangling = False  # True if stdout's last write has no trailing newline (an in-place progress update)
     start_time = time.monotonic()
+    stats = RunStats()
     try:
         game.park_mouse(window.bounds)
         game.trigger_roll()  # STATE1 -> first STATE4 result
@@ -809,9 +854,9 @@ def run(
             roll = _read_recovering_from_dialogs(
                 lambda: read_full_roll(
                     screenshot_fn, game, region_config, window.bounds, goal, settle_delay,
-                    should_stop, log.debug,
+                    should_stop, log.debug, stats,
                 ),
-                game, log.debug,
+                game, log.debug, stats,
             )
             decision = evaluate(goal, roll)
             line = log.log(decision)
@@ -836,9 +881,16 @@ def run(
     except StopRequested:
         if dangling:
             sys.stdout.write("\n")
+            dangling = False
         print(f"\nForce-stopped after {attempt} attempt(s).")
         return RunResult(False, attempt, decision, stopped=True)
+    finally:
+        # However the run ends -- accepted, gave up, force-stopped, or an
+        # UnreadableRollError propagating out -- close off the in-place
+        # progress line and leave a summary behind.
+        if dangling:
+            sys.stdout.write("\n")
+            dangling = False
+        _emit_run_summary(stats, log, time.monotonic() - start_time)
 
-    if dangling:
-        sys.stdout.write("\n")
     return RunResult(False, max_attempts, decision)

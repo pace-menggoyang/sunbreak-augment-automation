@@ -72,6 +72,24 @@ def test_park_mouse_moves_within_window_bounds():
     assert 200.0 <= y <= 200.0 + 900.0
 
 
+def test_slow_down_raises_delay_in_steps_and_stops_at_the_cap():
+    from qurio_aug.input import MAX_SLOWDOWN_FACTOR, SLOWDOWN_STEP
+    game = GameInput(controller=FakeController(), post_press_delay=0.2, mouse=FakeMouse())
+    old, new = game.slow_down()
+    assert old == 0.2 and abs(new - 0.2 * SLOWDOWN_STEP) < 1e-9
+    assert game.post_press_delay == new
+    while game.slow_down() is not None:  # keeps going until capped
+        pass
+    assert abs(game.post_press_delay - 0.2 * MAX_SLOWDOWN_FACTOR) < 1e-9
+    assert game.slow_down() is None  # never drifts past the cap
+
+
+def test_slow_down_is_a_noop_when_the_base_delay_is_zero():
+    game, _ = _make_game()  # post_press_delay=0.0, deliberately
+    assert game.slow_down() is None
+    assert game.post_press_delay == 0.0
+
+
 def run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_")]
     failures = 0
