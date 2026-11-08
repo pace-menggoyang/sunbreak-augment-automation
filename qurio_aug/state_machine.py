@@ -283,7 +283,13 @@ def _dump_unresolved_indicator(
     _unresolved_indicator_dumps += 1
     try:
         LOG_DIR.mkdir(exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
+        # The per-process counter makes the name unique even if two dumps
+        # land in the same millisecond -- a fast machine (or a tiny test
+        # image) can, and the second would silently overwrite the first.
+        stamp = (
+            time.strftime("%Y%m%d-%H%M%S")
+            + f"-{int(time.time() * 1000) % 1000:03d}-{_unresolved_indicator_dumps}"
+        )
         full = LOG_DIR / f"indicator_unresolved_{stamp}_full.png"
         crop = LOG_DIR / f"indicator_unresolved_{stamp}_indicator.png"
         screenshot.save(full)
