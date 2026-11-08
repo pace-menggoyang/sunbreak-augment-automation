@@ -1218,7 +1218,10 @@ DIALOG_PROCEED = "proceed"          # "Requires materials and Nz. Proceed with t
 DIALOG_APPLY_RESULTS = "apply_results"  # "Apply results?"
 DIALOG_ERROR = "error"              # "A communication error has occurred. [MR-...]"
 
+DIALOG_CONTINUE = "continue_augmenting"  # "Continue Augmenting armor?" -- only reachable after an apply/reject
+
 _DIALOG_PHRASES = (
+    (DIALOG_CONTINUE, "continue augmenting"),
     (DIALOG_PROCEED, "requires materials"),
     (DIALOG_PROCEED, "proceed with this transaction"),
     (DIALOG_APPLY_RESULTS, "apply results"),

@@ -893,6 +893,21 @@ def test_read_recovering_gives_up_if_dialog_keeps_returning(monkeypatch):
     assert game.confirm_calls == state_machine.MAX_DIALOG_RECOVERIES
 
 
+def test_continue_augmenting_dialog_is_not_dismissed_automatically(monkeypatch):
+    game = FakeGame()
+
+    def read():
+        raise state_machine.UnexpectedDialogError(ocr.DIALOG_CONTINUE)
+
+    err = _expect_error(
+        lambda: state_machine._read_recovering_from_dialogs(read, game, lambda m: None),
+        state_machine.UnexpectedDialogError,
+    )
+    assert err.kind == ocr.DIALOG_CONTINUE
+    assert "out of step" in str(err)
+    assert (game.confirm_calls, game.cancel_calls) == (0, 0)  # no key was pressed
+
+
 def run_all():
     class FakeMonkeypatch:
         def __init__(self):

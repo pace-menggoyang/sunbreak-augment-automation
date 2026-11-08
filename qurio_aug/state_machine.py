@@ -109,7 +109,14 @@ _DIALOG_LABELS = {
     ocr.DIALOG_PROCEED: '"Requires materials... Proceed?"',
     ocr.DIALOG_APPLY_RESULTS: '"Apply results?"',
     ocr.DIALOG_ERROR: 'a game error dialog ("A communication error has occurred")',
+    ocr.DIALOG_CONTINUE: '"Continue Augmenting armor?"',
 }
+
+# Dialogs run() deliberately does NOT try to dismiss. "Continue Augmenting"
+# only appears after an apply/reject has already happened, so the macro is
+# out of step and a blind Confirm (Yes) would carry on to Material Select
+# from an unknown state -- stop and let the user look instead.
+_UNRECOVERABLE_DIALOGS = frozenset({ocr.DIALOG_CONTINUE})
 
 # How many dialogs in a row run() will dismiss while re-reading the same
 # attempt before giving up -- a dialog that keeps coming back means
@@ -596,6 +603,10 @@ def _read_recovering_from_dialogs(
         try:
             return read()
         except UnexpectedDialogError as e:
+            if e.kind in _UNRECOVERABLE_DIALOGS:
+                raise UnexpectedDialogError(
+                    e.kind, "the key sequence is out of step, so it wasn't dismissed automatically"
+                ) from e
             if recoveries >= MAX_DIALOG_RECOVERIES:
                 raise UnexpectedDialogError(
                     e.kind, f"still there after dismissing it {recoveries} times, stopping"
