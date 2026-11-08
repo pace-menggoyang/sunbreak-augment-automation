@@ -40,6 +40,12 @@ page_indicator_box: [0.4401, 0.2052, 0.5690, 0.2454]
 # rather than requiring an exact/clean read.
 results_title_box: [0.28, 0.095, 0.46, 0.165]
 
+# Text area of the centered modal dialog ("Proceed with this transaction?",
+# "Apply results?", "A communication error has occurred.") -- used only
+# once a read has already failed, to tell a covering dialog apart from a
+# genuinely unreadable row (see ocr.detect_modal_dialog).
+dialog_box: [0.36, 0.47, 0.64, 0.55]
+
 # Three distinct layouts, since the skill rows land in different places
 # depending on pagination state (see ocr.py's module docstring):
 row_templates:

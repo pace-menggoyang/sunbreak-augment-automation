@@ -229,6 +229,9 @@ class RegionConfig:
     next_page_key: str
     prev_page_key: str
     window_title_hint: str
+    # Centered modal-dialog text area -- see detect_modal_dialog. Defaulted
+    # so a regions.yaml (or test config) that predates it still loads.
+    dialog_box: tuple[float, float, float, float] = (0.36, 0.47, 0.64, 0.55)
 
 
 def _load_rows(raw_rows: list[dict]) -> list[RowRegions]:
@@ -249,6 +252,7 @@ def load_region_config(path: Path | None = None) -> RegionConfig:
         next_page_key=raw["next_page_key"],
         prev_page_key=raw["prev_page_key"],
         window_title_hint=raw["window_title_hint"],
+        dialog_box=tuple(raw.get("dialog_box", RegionConfig.dialog_box)),
     )
 
 
@@ -1120,3 +1124,40 @@ def is_augmentation_results_screen(screenshot: Image.Image, config: RegionConfig
     crop = _crop_fraction(screenshot, config.results_title_box)
     text = _run_tesseract(_upscale(crop, UPSCALE), config=_RESULTS_TITLE_CONFIG)
     return fuzz.partial_ratio("augmentation results", text.lower()) >= RESULTS_TITLE_MATCH_SCORE
+
+
+# ---------------------------------------------------------------------------
+# Modal dialogs that can sit on top of the skill rows. Confirmed in live
+# logs: every fatal UnreadableRollError in the Windows beta runs was one of
+# these covering the rows (the pre-roll "Proceed?" confirm, a stray "Apply
+# results?", or a server "communication error") -- not a genuine OCR
+# failure -- so the rows read UNPARSEABLE for all 8 retries on a screen
+# that could never change.
+
+DIALOG_PROCEED = "proceed"          # "Requires materials and Nz. Proceed with this transaction?"
+DIALOG_APPLY_RESULTS = "apply_results"  # "Apply results?"
+DIALOG_ERROR = "error"              # "A communication error has occurred. [MR-...]"
+
+_DIALOG_PHRASES = (
+    (DIALOG_PROCEED, "requires materials"),
+    (DIALOG_PROCEED, "proceed with this transaction"),
+    (DIALOG_APPLY_RESULTS, "apply results"),
+    (DIALOG_ERROR, "communication error"),
+)
+DIALOG_MATCH_SCORE = 80
+
+
+def detect_modal_dialog(screenshot: Image.Image, config: RegionConfig) -> str | None:
+    """Which known modal dialog (a DIALOG_* constant) is covering the
+    results panel, or None if none is recognized. Costs one tesseract call,
+    so state_machine only runs it once a read has already come back
+    unparseable, never on a clean read.
+    """
+    crop = _crop_fraction(screenshot, config.dialog_box)
+    text = _run_tesseract(_upscale(crop, UPSCALE), config=_RESULTS_TITLE_CONFIG).lower()
+    best_kind, best_score = None, DIALOG_MATCH_SCORE - 1
+    for kind, phrase in _DIALOG_PHRASES:
+        score = fuzz.partial_ratio(phrase, text)
+        if score > best_score:
+            best_kind, best_score = kind, score
+    return best_kind

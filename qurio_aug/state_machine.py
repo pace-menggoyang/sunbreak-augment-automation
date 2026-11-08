@@ -105,6 +105,49 @@ class UnreadableRollError(RuntimeError):
     """
 
 
+_DIALOG_LABELS = {
+    ocr.DIALOG_PROCEED: '"Requires materials... Proceed?"',
+    ocr.DIALOG_APPLY_RESULTS: '"Apply results?"',
+    ocr.DIALOG_ERROR: 'a game error dialog ("A communication error has occurred")',
+}
+
+# How many dialogs in a row run() will dismiss while re-reading the same
+# attempt before giving up -- a dialog that keeps coming back means
+# something else is wrong (server down, game desynced) and blindly
+# pressing keys would just make it worse.
+MAX_DIALOG_RECOVERIES = 3
+
+
+class UnexpectedDialogError(UnreadableRollError):
+    """A known modal dialog is covering the skill rows. Subclasses
+    UnreadableRollError so callers that don't know about it (dry-run,
+    main.py's handlers) still treat it as a clean hard stop; run() catches
+    it specifically and tries to dismiss the dialog instead.
+    """
+
+    def __init__(self, kind: str, detail: str = ""):
+        self.kind = kind
+        super().__init__(
+            f"{_DIALOG_LABELS.get(kind, kind)} is covering the results screen"
+            + (f" -- {detail}" if detail else "")
+        )
+
+
+def _dismiss_dialog(game: GameInput, kind: str) -> None:
+    """Gets back to a readable state without ever changing game outcome:
+    - Proceed: Yes is the default -- exactly the confirm trigger_roll was
+      about to press, so the roll just continues.
+    - Apply results: No is the default, and it can appear when a macro
+      slipped a key. Cancel (== No) dismisses it without applying
+      anything; the roll is then re-read and decided normally.
+    - Error: only offers Close.
+    """
+    if kind == ocr.DIALOG_APPLY_RESULTS:
+        game.cancel()
+    else:
+        game.confirm()
+
+
 def _dump_debug_crops(screenshot: Image.Image, template: list[ocr.RowRegions], page: list[ocr.ParsedRow]) -> list[Path]:
     """Save the full screenshot plus name/value crops for every unparseable
     row on an UnreadableRollError, so the failure can be diagnosed from the
@@ -289,6 +332,19 @@ def _read_page_rows(
     def _already_decided() -> bool:
         return page is not None and _protected_violated(_page_skills(page), protected_skills)
 
+    def _raise_if_dialog() -> None:
+        # A dialog over the rows can never clear on its own, so retrying
+        # against it just burns the whole retry budget (~3s) before failing.
+        if region_config is None:
+            return
+        kind = ocr.detect_modal_dialog(screenshot, region_config)
+        if kind is not None:
+            debug_log(f"{page_label}: modal dialog detected ({kind})")
+            raise UnexpectedDialogError(kind)
+
+    if page is not None and any(row.unparseable for row in page) and not _already_decided():
+        _raise_if_dialog()
+
     retries = 0
     while (
         (page is None or any(row.unparseable for row in page))
@@ -310,6 +366,7 @@ def _read_page_rows(
         )
 
     if any(row.unparseable for row in page) and not _already_decided():
+        _raise_if_dialog()  # a dialog can also appear mid-retry
         saved = _dump_debug_crops(screenshot, template, page)
         saved_list = "\n  ".join(str(p) for p in saved)
         # Only checked here, at the point a read is already about to fail
@@ -523,6 +580,29 @@ def read_full_roll(
     return results
 
 
+def _read_recovering_from_dialogs(
+    read: Callable[[], list[SkillResult]],
+    game: GameInput,
+    debug_log: Callable[[str], None],
+) -> list[SkillResult]:
+    """Runs `read`, dismissing a covering modal dialog (see
+    _dismiss_dialog) and re-reading the same roll, up to
+    MAX_DIALOG_RECOVERIES times in a row before re-raising.
+    """
+    recoveries = 0
+    while True:
+        try:
+            return read()
+        except UnexpectedDialogError as e:
+            if recoveries >= MAX_DIALOG_RECOVERIES:
+                raise UnexpectedDialogError(
+                    e.kind, f"still there after dismissing it {recoveries} times, stopping"
+                ) from e
+            recoveries += 1
+            debug_log(f"dismissing dialog {e.kind} ({recoveries}/{MAX_DIALOG_RECOVERIES})")
+            _dismiss_dialog(game, e.kind)
+
+
 @dataclass
 class RunResult:
     accepted: bool
@@ -667,9 +747,12 @@ def run(
         game.trigger_roll()  # STATE1 -> first STATE4 result
 
         for attempt in range(1, max_attempts + 1):
-            roll = read_full_roll(
-                screenshot_fn, game, region_config, window.bounds, goal, settle_delay, should_stop,
-                log.debug,
+            roll = _read_recovering_from_dialogs(
+                lambda: read_full_roll(
+                    screenshot_fn, game, region_config, window.bounds, goal, settle_delay,
+                    should_stop, log.debug,
+                ),
+                game, log.debug,
             )
             decision = evaluate(goal, roll)
             line = log.log(decision)

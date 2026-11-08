@@ -69,6 +69,16 @@ class FakeGame:
     def reroll_macro(self):
         self.reroll_calls += 1
 
+    # Only exercised by dialog-recovery tests.
+    confirm_calls = 0
+    cancel_calls = 0
+
+    def confirm(self):
+        self.confirm_calls += 1
+
+    def cancel(self):
+        self.cancel_calls += 1
+
 
 DUMMY_WINDOW_BOUNDS = (0.0, 0.0, 1440.0, 900.0)
 
@@ -111,10 +121,14 @@ class Script:
     enrichment in _read_page_rows's failure path.
     """
 
-    def __init__(self, monkeypatch, entries, game=None, results_screen_present=True):
+    def __init__(self, monkeypatch, entries, game=None, results_screen_present=True, dialogs=None):
         self.entries = entries
         self.calls = 0
         self.game = game
+        # `dialogs`: iterable of detect_modal_dialog results, one per call
+        # (default: never a dialog, and never a real tesseract call).
+        dialog_iter = iter(dialogs or ())
+        monkeypatch.setattr(ocr, "detect_modal_dialog", lambda *a, **kw: next(dialog_iter, None))
         monkeypatch.setattr(ocr, "read_page_indicator", self._read_page_indicator)
         monkeypatch.setattr(ocr, "read_page", self._read_page)
         monkeypatch.setattr(ocr, "is_augmentation_results_screen", lambda *a, **kw: results_screen_present)
@@ -807,6 +821,76 @@ def test_format_progress_padded_to_fixed_width(monkeypatch):
     short = state_machine._format_progress(9, 300, elapsed=5.0)
     long = state_machine._format_progress(299, 300, elapsed=5000.0)
     assert len(short) == len(long) == state_machine._PROGRESS_LINE_WIDTH
+
+
+# --- modal dialogs covering the rows: detected on the first unparseable
+# read (no 8-retry burn), then dismissed by run() without changing the
+# game outcome. ---
+
+
+def _expect_error(fn, exc_type):
+    # No pytest.raises -- CI's standalone runner (run_all below) has no pytest.
+    try:
+        fn()
+    except exc_type as e:
+        return e
+    raise AssertionError(f"expected {exc_type.__name__}")
+
+
+def test_dialog_over_rows_raises_immediately_without_retrying(monkeypatch):
+    script = Script(monkeypatch, [(None, [_unparseable(), _unparseable(), _blank()])],
+                    dialogs=[ocr.DIALOG_APPLY_RESULTS])
+    err = _expect_error(lambda: state_machine.read_full_roll(
+        script.screenshot_fn, FakeGame(), DUMMY_REGION_CONFIG, DUMMY_WINDOW_BOUNDS, _goal(),
+    ), state_machine.UnexpectedDialogError)
+    assert err.kind == ocr.DIALOG_APPLY_RESULTS
+    assert script.calls == 1  # no retries against a screen that can't change
+    assert isinstance(err, state_machine.UnreadableRollError)
+
+
+def test_unparseable_without_dialog_still_retries_then_fails(monkeypatch):
+    script = Script(monkeypatch, [(None, [_unparseable(), _blank(), _blank()])])
+    err = _expect_error(lambda: state_machine.read_full_roll(
+        script.screenshot_fn, FakeGame(), DUMMY_REGION_CONFIG, DUMMY_WINDOW_BOUNDS, _goal(),
+    ), state_machine.UnreadableRollError)
+    assert not isinstance(err, state_machine.UnexpectedDialogError)
+    assert script.calls == 1 + state_machine.UNREADABLE_RETRY_COUNT
+
+
+def test_read_recovering_dismisses_dialog_then_rereads(monkeypatch):
+    # kind -> (cancel presses, confirm presses)
+    expected = {
+        ocr.DIALOG_APPLY_RESULTS: (1, 0),  # No-equivalent: never applies anything
+        ocr.DIALOG_PROCEED: (0, 1),        # Yes is the default the macro wanted
+        ocr.DIALOG_ERROR: (0, 1),          # Close
+    }
+    for kind, (cancel, confirm) in expected.items():
+        game = FakeGame()
+        outcomes = [state_machine.UnexpectedDialogError(kind), [SkillResult("Artillery", delta=1)]]
+
+        def read():
+            out = outcomes.pop(0)
+            if isinstance(out, Exception):
+                raise out
+            return out
+
+        roll = state_machine._read_recovering_from_dialogs(read, game, lambda m: None)
+        assert roll == [SkillResult("Artillery", delta=1)]
+        assert (game.cancel_calls, game.confirm_calls) == (cancel, confirm), kind
+
+
+def test_read_recovering_gives_up_if_dialog_keeps_returning(monkeypatch):
+    game = FakeGame()
+
+    def read():
+        raise state_machine.UnexpectedDialogError(ocr.DIALOG_ERROR)
+
+    err = _expect_error(
+        lambda: state_machine._read_recovering_from_dialogs(read, game, lambda m: None),
+        state_machine.UnexpectedDialogError,
+    )
+    assert "still there" in str(err)
+    assert game.confirm_calls == state_machine.MAX_DIALOG_RECOVERIES
 
 
 def run_all():
