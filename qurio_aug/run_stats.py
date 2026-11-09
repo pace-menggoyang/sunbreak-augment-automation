@@ -14,6 +14,11 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 
+# About 17% of ordinary rolls have no skills at all (beta logs); well above
+# this over a real sample means the bot probably can't see the skill rows.
+EMPTY_ROLL_WARN_PERCENT = 50
+
+
 def _digit_family(source: str) -> str:
     """"tesseract:psm8" / "tesseract:psm7!" -> "tesseract"; others unchanged."""
     return source.rstrip("!").split(":", 1)[0]
@@ -34,8 +39,8 @@ class RunStats:
     digit_sources: Counter = field(default_factory=Counter)
     name_sources: Counter = field(default_factory=Counter)
     implausible_digits: int = 0  # digits above the plausible delta that nothing could correct ("!")
-    speed: str = ""  # label of the speed profile in use, "" if normal/unspecified
-    reverted_after_dialogs: int | None = None  # set if a fast run switched itself back to normal
+    blank_attempts: int = 0  # attempts whose roll had no skills at all
+    max_blank_streak: int = 0  # longest unbroken run of those
 
     def record_page(self, page) -> None:
         """Tallies how each parsed row's digit and name were read."""
@@ -58,11 +63,12 @@ class RunStats:
         mins, secs = divmod(int(elapsed), 60)
         rate = attempts / elapsed * 60 if elapsed > 0 else 0.0
         lines = [f"Run summary: {attempts} attempt(s) in {mins}m{secs:02d}s ({rate:.1f}/min)"]
-        if self.speed:
-            text = f"speed: {self.speed}"
-            if self.reverted_after_dialogs is not None:
-                text += f" -- switched back to Normal after {self.reverted_after_dialogs} stray dialogs"
-            lines.append("  " + text)
+        if self.blank_attempts and attempts:
+            pct = 100 * self.blank_attempts / attempts
+            text = f"  empty rolls (no skills at all): {self.blank_attempts} of {attempts} ({pct:.0f}%), longest streak {self.max_blank_streak}"
+            if pct > EMPTY_ROLL_WARN_PERCENT and attempts >= 20:
+                text += " -- unusually high (normal is ~17%); check the game screen and the armor/augment"
+            lines.append(text)
 
         if self.digit_sources:
             text = _counts(self.digit_sources)

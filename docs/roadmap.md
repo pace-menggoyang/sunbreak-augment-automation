@@ -141,6 +141,21 @@ supporting them.
    sleeping. Needs calibrating against the live game, so it wants a beta
    tester's captures of each dialog.
 
+   **Measured (v0.1.7-beta, `--probe`, 12 rolls) -- and it lowers this
+   item's value a lot.** After the final confirm nothing on screen changes
+   for ~600ms, then the results fade in and are readable by 674-728ms; the
+   bot reads at ~755ms. The modals finish appearing 110-205ms after their
+   key; the bot waits 210ms. So the fixed delays are already within ~30ms of
+   what the game needs almost everywhere, and the game's own animation is
+   ~95% of an attempt. Verified stepping could still save only the one slack
+   spot (`left` settles in ~70ms vs the 210ms wait, ~0.1s per attempt, ~5%)
+   and would mainly buy *robustness* against a slow moment, not speed. The
+   earlier 25-35% estimate in this item was wrong. Worth doing only if
+   desyncs ("Proceed?" stops, ~1 per 9,000 attempts before the dialog
+   recovery) turn out to matter in practice; not as a speed project. The
+   probe also saves a reference screenshot of every screen in the cycle,
+   which is the calibration data it would need.
+
 6. **Digit corpus for the `!`-tagged reads.** A digit above the plausible
    delta that no other recognizer can correct is kept, tagged `!`, rather
    than made unreadable (a misread that repeats on every retry would stop

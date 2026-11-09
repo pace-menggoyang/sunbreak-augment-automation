@@ -1027,6 +1027,93 @@ def test_run_still_prints_a_summary_when_it_dies_on_an_unreadable_roll(monkeypat
     assert f"page reads {state_machine.UNREADABLE_RETRY_COUNT}" in output  # the retries it burned
 
 
+# --- The settle wait must not be lowered. Measured with --probe over 12
+# rolls: after the final confirm nothing on screen changes for ~600ms, then
+# the results fade in and are readable within ~4/255 of final at 674-728ms.
+# The bot reads at 0.03 (key hold) + 0.18 (key delay) + settle + ~0.044
+# (screenshot). A "Faster" preset once used a 0.2s settle: it read at ~450ms,
+# saw the OLD screen, read it as an empty roll (accepted without a retry),
+# and rejected ~5,300 attempts unnoticed. ---
+
+
+def test_default_settle_wait_is_not_lowered_below_what_the_results_need(monkeypatch):
+    from qurio_aug.input import POST_PRESS_DELAY, PRESS_HOLD
+
+    read_at_ms = (PRESS_HOLD + POST_PRESS_DELAY + state_machine.RESULT_SETTLE_DELAY) * 1000 + 44
+    latest_readable_ms = 728  # worst of 12 probed rolls
+    assert read_at_ms >= latest_readable_ms, (
+        f"the bot would read at ~{read_at_ms:.0f}ms but results were still fading in at {latest_readable_ms}ms"
+    )
+    assert state_machine.RESULT_SETTLE_DELAY >= 0.5
+
+
+def test_there_is_no_speed_preset_command(monkeypatch):
+    from qurio_aug import main
+    assert "speed" not in {name for names, _ in main._COMMANDS for name in names}
+    assert "speed" not in [cmd_id for cmd_id, _ in main._MENU_ITEMS]
+
+
+# --- A long streak of empty rolls means the bot is blind (this really
+# happened: ~5,300 attempts read as empty because a speed preset read the
+# screen before the skill rows were drawn). Warn, then stop before more
+# materials are spent. ---
+
+
+def test_a_streak_of_empty_rolls_warns_then_stops_before_the_next_reroll(monkeypatch):
+    monkeypatch.setattr(state_machine, "BLANK_STREAK_WARN", 3)
+    monkeypatch.setattr(state_machine, "BLANK_STREAK_STOP", 5)
+    game, fake_out, holder, tmpdir = _run_with_decisions(
+        monkeypatch, None, entries=[(None, [_blank(), _blank(), _blank()])],
+    )
+    try:
+        err = _expect_error(
+            lambda: state_machine.run(
+                _goal(required="Artillery"), region_config=DUMMY_REGION_CONFIG, max_attempts=50,
+            ),
+            state_machine.BlankStreakError,
+        )
+    finally:
+        tmpdir.cleanup()
+    output = fake_out.getvalue()
+    assert isinstance(err, state_machine.UnreadableRollError)  # main.py already handles these cleanly
+    assert "5 attempts in a row read as empty" in str(err)
+    assert "3 attempts in a row read as empty" in output and "will stop at 5" in output  # the warning
+    assert game.reroll_calls == 4  # attempts 1-4 rerolled; attempt 5 stopped *before* spending more
+    assert "empty rolls (no skills at all): 5 of 5" in output  # and the summary says so
+
+
+def test_a_roll_with_a_skill_resets_the_empty_streak(monkeypatch):
+    monkeypatch.setattr(state_machine, "BLANK_STREAK_WARN", 3)
+    monkeypatch.setattr(state_machine, "BLANK_STREAK_STOP", 5)
+    game, fake_out, holder, tmpdir = _run_with_decisions(
+        monkeypatch, None, entries=[(None, [_blank(), _blank(), _blank()])],
+    )
+    # Two empty rolls, then one with a skill, repeating -- the streak never reaches 3.
+    pages = iter([[_blank()] * 3, [_blank()] * 3, [_row("Diversion"), _blank(), _blank()]] * 3)
+    monkeypatch.setattr(ocr, "read_page", lambda screenshot, template: next(pages))
+    try:
+        result = state_machine.run(
+            _goal(required="Artillery"), region_config=DUMMY_REGION_CONFIG, max_attempts=9,
+        )
+    finally:
+        tmpdir.cleanup()
+    output = fake_out.getvalue()
+    assert not result.accepted and result.attempts == 9
+    assert "attempts in a row read as empty" not in output
+    assert "empty rolls (no skills at all): 6 of 9" in output
+
+
+def test_a_normal_run_with_no_empty_rolls_has_no_empty_roll_line(monkeypatch):
+    game, fake_out, holder, tmpdir = _run_with_decisions(monkeypatch, [
+        Decision(True, "matched profile", [SkillResult("Artillery", delta=1)], []),
+    ])
+    try:
+        state_machine.run(_goal(), region_config=DUMMY_REGION_CONFIG, max_attempts=3)
+    finally:
+        tmpdir.cleanup()
+    assert "empty rolls" not in fake_out.getvalue()
+
+
 def run_all():
     class FakeMonkeypatch:
         def __init__(self):

@@ -52,6 +52,28 @@ def test_summary_lists_every_section_that_has_data():
     assert "key delay raised 0.180s -> 0.281s" in text  # first old -> last new
 
 
+def test_summary_flags_an_unusually_high_share_of_empty_rolls():
+    stats = RunStats()
+    stats.blank_attempts, stats.max_blank_streak = 48, 48
+    text = "\n".join(stats.summary_lines(attempts=50, elapsed=100.0))
+    assert "empty rolls (no skills at all): 48 of 50 (96%), longest streak 48" in text
+    assert "unusually high" in text
+
+
+def test_summary_does_not_flag_a_normal_share_of_empty_rolls():
+    stats = RunStats()
+    stats.blank_attempts, stats.max_blank_streak = 8, 2  # ~17% of 50 -- ordinary
+    text = "\n".join(stats.summary_lines(attempts=50, elapsed=100.0))
+    assert "empty rolls (no skills at all): 8 of 50 (16%)" in text
+    assert "unusually high" not in text
+
+
+def test_summary_does_not_cry_wolf_on_a_tiny_sample():
+    stats = RunStats()
+    stats.blank_attempts, stats.max_blank_streak = 3, 3  # 3 of 3, but only 3 attempts
+    assert "unusually high" not in "\n".join(stats.summary_lines(attempts=3, elapsed=6.0))
+
+
 def test_summary_omits_sections_with_nothing_to_report():
     stats = RunStats()
     stats.record_page([_row("template")])

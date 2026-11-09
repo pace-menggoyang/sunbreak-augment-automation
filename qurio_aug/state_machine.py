@@ -108,11 +108,26 @@ MAX_UNRESOLVED_INDICATOR_DUMPS = 5
 MAX_PAGES = 3
 MAX_ATTEMPTS_DEFAULT = 300
 
-# A run using a faster speed profile (see speed.py) switches itself back to
-# the normal timings for the rest of that run once this many stray dialogs
-# have had to be dismissed -- repeated ones mean the faster key delay is
-# causing real desyncs on this machine, not a one-off blip.
-FAST_REVERT_AFTER_DIALOGS = 3
+# Consecutive rolls that read back with no skills at all. Ordinary single
+# empty rolls are common (~17% of rolls in the beta logs, so 30 in a row is
+# ~1e-23 by chance); a streak means the bot can't see what the game shows.
+# It happened for real: ~5,300 attempts across several sessions read every
+# roll as empty and were rejected, unnoticed, because a shortened settle wait
+# read the screen before the results had even started to appear. Warn at the
+# first, stop at the second -- every reroll spends materials and zenny.
+BLANK_STREAK_WARN = 30
+BLANK_STREAK_STOP = 100
+
+
+def _blank_streak_message(streak: int, warning: bool) -> str:
+    base = (
+        f"{streak} attempts in a row read as empty (no skills at all). About 1 in 6 rolls is "
+        "empty, so this is almost certainly a problem, not bad luck: check that the game is on "
+        "the Augmentation Results screen, that this armor/augment can roll skills, and that "
+        "--settle-delay hasn't been lowered"
+    )
+    return base + (f" -- the run will stop at {BLANK_STREAK_STOP}." if warning else " -- stopping.")
+
 
 LOG_DIR = Path("logs")
 
@@ -122,6 +137,14 @@ class UnreadableRollError(RuntimeError):
     indicator reports a page count we can't reconcile with what's on
     screen -- caller should treat this as a hard stop rather than guess
     and risk a wrong accept/reject action.
+    """
+
+
+class BlankStreakError(UnreadableRollError):
+    """Raised by run() after BLANK_STREAK_STOP empty rolls in a row. A
+    subclass of UnreadableRollError, so main.py already reports it cleanly
+    (message plus exit code 2) and dry-run/other callers treat it as a hard
+    stop.
     """
 
 
@@ -815,8 +838,6 @@ def run(
     post_press_delay: float = POST_PRESS_DELAY,
     settle_delay: float = RESULT_SETTLE_DELAY,
     should_stop: Callable[[], bool] = lambda: False,
-    speed_label: str = "",
-    fallback_timing: tuple[float, float, float] | None = None,
 ) -> RunResult:
     """Runs the full autonomous reroll loop starting from STATE 1
     (Material Select, correct armor piece + augment type already chosen)
@@ -845,20 +866,10 @@ def run(
     stdout is a real terminal -- redirected to a file/pipe, an in-place
     \r update would just be unreadable noise, so every attempt prints its
     full line there, unchanged from before this existed.
-
-    speed_label/fallback_timing are for a faster speed profile (see
-    speed.py): fallback_timing is the (press_hold, post_press_delay,
-    settle_delay) of the normal profile. When given, the auto-slowdown
-    (GameInput.slow_down) can climb back up to that delay but never past
-    it, and once FAST_REVERT_AFTER_DIALOGS stray dialogs have been
-    dismissed the run switches itself back to those timings for good.
     """
     region_config = region_config or ocr.load_region_config()
     window = capture.find_game_window(window_title_hint or region_config.window_title_hint)
-    game = GameInput(
-        post_press_delay=post_press_delay, press_hold=press_hold, should_stop=should_stop,
-        max_post_press_delay=fallback_timing[1] if fallback_timing else None,
-    )
+    game = GameInput(post_press_delay=post_press_delay, press_hold=press_hold, should_stop=should_stop)
     log = AttemptLogger(goal=goal)
 
     def screenshot_fn() -> Image.Image:
@@ -869,8 +880,8 @@ def run(
     live_progress = sys.stdout.isatty()
     dangling = False  # True if stdout's last write has no trailing newline (an in-place progress update)
     start_time = time.monotonic()
-    stats = RunStats(speed=speed_label)
-    reverted = False
+    stats = RunStats()
+    blank_streak = 0
     try:
         game.park_mouse(window.bounds)
         game.trigger_roll()  # STATE1 -> first STATE4 result
@@ -883,20 +894,6 @@ def run(
                 ),
                 game, log.debug, stats,
             )
-            if fallback_timing and not reverted and sum(stats.dialogs.values()) >= FAST_REVERT_AFTER_DIALOGS:
-                reverted = True
-                stats.reverted_after_dialogs = sum(stats.dialogs.values())
-                game.set_timing(fallback_timing[0], fallback_timing[1])
-                settle_delay = fallback_timing[2]
-                message = (
-                    f"fast mode switched off after {stats.reverted_after_dialogs} stray dialogs -- "
-                    "continuing at normal speed"
-                )
-                log.debug(message)
-                if dangling:
-                    sys.stdout.write("\n")
-                    dangling = False
-                print(message)
             decision = evaluate(goal, roll)
             line = log.log(decision)
             notable = decision.accepted or any(r.is_suspicious for r in decision.added + decision.removed)
@@ -911,6 +908,26 @@ def run(
                     sys.stdout.write("\n")
                     dangling = False
                 print(line)
+
+            # A roll with no skills at all is ordinary (~17% of rolls in the
+            # beta logs), but a long unbroken streak never is -- it means the
+            # bot is blind (wrong screen, an armor/augment that can't roll
+            # skills, a read before the rows are drawn). Warn, then stop
+            # before the next reroll spends more materials.
+            blank_streak = blank_streak + 1 if not roll else 0
+            stats.blank_attempts += 1 if not roll else 0
+            stats.max_blank_streak = max(stats.max_blank_streak, blank_streak)
+            if blank_streak == BLANK_STREAK_WARN:
+                if dangling:
+                    sys.stdout.write("\n")
+                    dangling = False
+                message = _blank_streak_message(blank_streak, warning=True)
+                log.debug(message)
+                print(message)
+            if blank_streak >= BLANK_STREAK_STOP:
+                message = _blank_streak_message(blank_streak, warning=False)
+                log.debug(message)
+                raise BlankStreakError(message)
 
             if decision.accepted:
                 game.accept_macro()

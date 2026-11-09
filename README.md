@@ -213,44 +213,50 @@ scrolling past per attempt; an accepted roll or a suspiciously large
 delta (a possible OCR misread, worth double-checking against the game)
 always prints its own line immediately.
 
-### Speed presets (experimental)
+### Timing: why there is no "fast mode"
 
-Pick a preset from the interactive menu's **Speed** entry, or with
-`--speed` on the command line (`--fast` is shorthand for `--speed fast`):
+An attempt takes about 2.0s, and almost all of that is the game's own
+animation, not the bot. Measured with `--probe` (below) over 12 rolls:
 
-| Preset | What it changes | Speed | Risk |
-|---|---|---|---|
-| `normal` (default) | Nothing -- the tested defaults | -- | -- |
-| `safe` ("Faster") | A shorter wait before reading each roll | ~17% faster | None for the game: if a sparkle hasn't faded the row is simply re-read |
-| `fast` ("Fast", **experimental**) | Also a shorter delay between key presses | ~55% faster | A key can land mid-transition (see below) |
+- After the final confirm, **nothing on screen changes for ~600ms**, then the
+  results fade in and are readable by 674-728ms. The bot reads at ~755ms, so
+  it is already within ~30ms of the earliest safe moment.
+- The game's modals finish appearing **110-205ms** after the key that opens
+  them; the bot waits 210ms (0.03s key hold + 0.18s delay).
 
-The speed-ups are estimates from the beta logs (about 2.0s per attempt at
-the defaults, of which ~1.5s is key delays and 0.5s is the settle wait).
+So the defaults are close to the floor. Two shorter-delay "speed presets"
+shipped in v0.1.6-beta and were removed in v0.1.7-beta:
 
-`fast` guards itself: if a stray dialog appears it dismisses it and widens
-the key delay a notch (never past the normal delay), and after 3 stray
-dialogs in one run it switches itself back to `normal` for the rest of that
-run and says so. Still validate it first with `--max-attempts 10-20`,
-watching that the game lands on the expected screen each time. The run
-summary printed at the end shows the preset used and whether it had to
-switch itself off. Passing `--press-hold`, `--post-press-delay` or
-`--settle-delay` explicitly overrides the preset's value for that knob.
+- *Faster* cut the pre-read wait to 0.2s. That reads at ~450ms, before the
+  results have even started to appear, so the bot saw the *old* screen, read
+  it as an empty roll (accepted without a retry) and rejected every roll.
+- *Fast* also cut the key delay to 0.12s, below the modals' appearance time.
 
-### Tuning speed for long runs
+The most any delay tuning could still save is about 5%, so there is no
+preset. **Don't lower `--settle-delay`.** `--press-hold` and
+`--post-press-delay` can still be changed by hand, but the defaults are
+already near the measured limit.
 
-`--press-hold`, `--post-press-delay`, and `--settle-delay` control the
-timing between keypresses and before each screen capture -- the defaults
-were halved from an early, deliberately conservative baseline, not
-measured minimums. `--post-press-delay` is the one to be careful with: it
-stands in for "has the game's menu transition settled", and cutting it
-too far risks a macro's later keypress landing mid-transition on the
-wrong screen -- a failure that desyncs silently rather than raising an
-error. `--settle-delay` (waiting for the sparkle decoration to fade
-before the first OCR read) is lower-risk to cut, since the worst case is
-just one extra retry rather than a state desync. Validate any faster
-setting with `--max-attempts 10-20` first, watching that the game
-actually lands on the expected screen each time, before trusting it for
-a long (500+) run.
+If a run reads 30 empty rolls in a row it prints a warning, and at 100 it
+stops (about 1 in 6 rolls is genuinely empty, so a long streak means the bot
+can't see the game -- wrong screen, an armor/augment that can't roll skills,
+or a shortened `--settle-delay`).
+
+### Measuring screen timing (`--probe`)
+
+`qurio-aug --probe` (or the menu's `probe` entry) measures how long each
+screen of the augment cycle takes to appear after a key press -- the data
+behind the section above. Put the game on **Material Select**, press the
+start hotkey, and it runs a few rolls of the bot's own key sequence,
+screenshotting every ~50ms after each key. Each roll is a real attempt
+(materials + zenny) that is rejected afterwards, so the armor is unchanged.
+`--probe-rolls N` sets how many (default 3; more rolls make it likelier that
+one has skills to time).
+
+It writes, to `logs/`: a summary (`probe_*_summary.txt`), a per-frame CSV
+(`probe_*.csv`) and one reference screenshot per screen (`probe_*.png`).
+The headline number is when the **skill rows finish drawing**. Attach the
+summary and CSV to a bug report if timing looks wrong on your machine.
 
 ## Known limitations
 
@@ -299,6 +305,8 @@ how that's wired up.
 - `qurio_aug/hotkeys.py` -- global start/force-stop hotkeys (Control+M/N on
   macOS, Alt+M/N on Windows)
 - `qurio_aug/state_machine.py` -- wires the above into the full loop
+- `qurio_aug/run_stats.py` -- counters behind the end-of-run summary
+- `qurio_aug/probe.py` -- the `--probe` timing diagnostic (see above)
 - `qurio_aug/paths.py` / `qurio_aug/tesseract_setup.py` -- resource-path
   and bundled-Tesseract resolution for both source and compiled runs
 - `qurio_aug/calibrate.py` / `main.py` -- CLI entry points

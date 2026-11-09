@@ -45,11 +45,11 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 
-from qurio_aug import calibrate, capture, ocr, speed, state_machine, tui
+from qurio_aug import calibrate, capture, ocr, probe, state_machine, tui
 from qurio_aug.goal_config import GoalValidationError, load_goal
 from qurio_aug.goal_wizard import run_editor, run_wizard
-from qurio_aug.hotkeys import DEFAULT_START_HOTKEY, DEFAULT_STOP_HOTKEY, HotkeyController
-from qurio_aug.input import POST_PRESS_DELAY, PRESS_HOLD
+from qurio_aug.hotkeys import DEFAULT_START_HOTKEY, DEFAULT_STOP_HOTKEY, HotkeyController, StopRequested
+from qurio_aug.input import POST_PRESS_DELAY, PRESS_HOLD, GameInput
 from qurio_aug.logger import AttemptLogger
 from qurio_aug.support_bundle import build_support_bundle
 from qurio_aug.tesseract_setup import configure_tesseract, selfcheck
@@ -140,6 +140,53 @@ def _list_windows() -> None:
         print(f"owner={w.owner_name!r} title={w.title!r} bounds={w.bounds}")
 
 
+DEFAULT_PROBE_ROLLS = 3
+
+
+def _run_probe(window_hint: str, region_config: ocr.RegionConfig, rolls: int = DEFAULT_PROBE_ROLLS) -> int:
+    """The timing probe (see probe.py): measures how long each screen of the
+    augment cycle takes to appear after a key press. Waits for the start
+    hotkey like a farming run does, then runs `rolls` full cycles from
+    Material Select. Each cycle is one real augment attempt (materials +
+    zenny); the roll is rejected, so the armor is unchanged.
+    """
+    window = capture.find_game_window(window_hint)
+    start_display = _format_hotkey(DEFAULT_START_HOTKEY)
+    stop_display = _format_hotkey(DEFAULT_STOP_HOTKEY)
+    with HotkeyController(DEFAULT_START_HOTKEY, DEFAULT_STOP_HOTKEY) as hotkeys:
+        # post_press_delay=0: press() returns the instant the key is released,
+        # so the probe's screenshots start right away.
+        game = GameInput(post_press_delay=0.0, should_stop=hotkeys.stop_requested)
+        print(tui.accent(
+            f"Timing probe: {rolls} roll(s). Put the game on Material Select (the right armor piece and "
+            f"augment type chosen, with enough materials -- each roll is a real attempt and is rejected "
+            f"afterwards), then press {start_display} to start ({stop_display} cancels)."
+        ))
+        if not hotkeys.wait_for_start():
+            print(tui.warn("Cancelled before starting."))
+            return 130
+        game.park_mouse(window.bounds)
+        try:
+            report = probe.run_probe(
+                capture_fn=lambda: capture.screenshot_window(window),
+                press_fn=game.press,
+                region_config=region_config,
+                should_stop=hotkeys.stop_requested,
+                cycles=rolls,
+                progress=lambda message: print(f"  {message}"),
+            )
+        except StopRequested:
+            print(tui.warn("\nProbe stopped. The game may be partway through a cycle."))
+            return 130
+    print()
+    for line in probe.summary_lines(report):
+        print(line)
+    print(f"\nFull data: {report.csv_path}\nSummary:   {report.summary_path}")
+    print(f"Reference screenshots of every screen in the cycle: {len(report.images)} files in logs/ (probe_*.png)")
+    print(tui.good("Done. Please send the summary and the csv back -- they are what the next speed-up is built from."))
+    return 0
+
+
 def _run_package_failure() -> None:
     bundle = build_support_bundle()
     if bundle is None:
@@ -178,31 +225,6 @@ def _select_goal_path(default: str | None = None) -> str | None:
     return choice
 
 
-def _pick_speed(session: _SessionState) -> None:
-    """Menu entry for choosing a speed profile (see speed.py) for the rest
-    of this session's dry-runs and farming runs. The two faster levels are
-    kept distinct on purpose: "Faster" only shortens the wait before
-    reading a roll, which can't desync the game; "Fast" also shortens the
-    delay between key presses, which can.
-    """
-    items = [(p.key, f"{p.label} -- {p.description}") for p in speed.PROFILES.values()]
-    choice = tui.pick("Speed", items, default=session.speed, on_ctrl_c="cancel")
-    if choice is None:
-        return
-    session.speed = choice
-    print(f"speed set to {speed.get_profile(choice).label}")
-    if speed.get_profile(choice).experimental:
-        print(tui.warn(_EXPERIMENTAL_SPEED_WARNING))
-
-
-_EXPERIMENTAL_SPEED_WARNING = (
-    "Fast mode is experimental: a shorter delay between key presses can make a key land "
-    "mid-transition. It slows itself down if a stray dialog appears and switches itself off "
-    "after 3, but validate it with a small run first (e.g. max attempts 20) and watch that "
-    "the game lands on the expected screen each time."
-)
-
-
 def _prompt_max_attempts(default: int) -> int:
     """Only meaningful for a real farming run (choice 4) -- dry-run
     (choice 3) ignores max_attempts entirely (see _execute), so it isn't
@@ -236,7 +258,6 @@ class _SessionState:
     region_config: ocr.RegionConfig
     window_hint: str | None = None
     last_goal_path: str | None = None
-    speed: str = "normal"  # a speed.PROFILES key, set from the menu's Speed entry
 
 
 def _resolve_window_hint(session: _SessionState) -> str:
@@ -308,7 +329,6 @@ def _status_summary(session: _SessionState) -> list[str]:
     else:
         lines.append(f"window: not found (looking for {hint!r} -- use 'window <hint>' to override)")
     lines.append(f"goal: {session.last_goal_path or 'none selected yet'}")
-    lines.append(f"speed: {speed.get_profile(session.speed).label}")
     return lines
 
 
@@ -321,8 +341,6 @@ def _classify_status_line(line: str) -> str:
     if line.startswith("goal:"):
         return "neutral"
     lowered = line.lower()
-    if lowered.startswith("speed:"):
-        return "warn" if "experimental" in lowered else "neutral"
     if lowered.startswith("tesseract:") and "failed" in lowered:
         return "bad"  # a real blocking problem, not just "not set up yet"
     if "inactive" in lowered or "ambiguous" in lowered or "not found" in lowered:
@@ -349,7 +367,7 @@ _COMMANDS: list[tuple[tuple[str, ...], str]] = [
     (("7", "windows"), "List visible windows"),
     (("8", "package-failure", "bug-report"), "Package up my last failure (for a bug report)"),
     (("window",), "Show or set the window title/owner hint for this session, e.g. 'window Monster Hunter'"),
-    (("speed",), "Choose a speed: Normal, Faster, or Fast (experimental)"),
+    (("probe",), "Measure how long each screen takes to appear (diagnostic -- costs a few real attempts)"),
     (("status",), "Show tesseract/window/goal status"),
     (("help", "?"), "Show this command list"),
     (("0", "exit", "quit", "q"), "Exit"),
@@ -402,7 +420,7 @@ _MENU_ITEMS: list[tuple[str, str]] = [
     ("windows", "List visible windows"),
     ("package-failure", "Package up my last failure (for a bug report)"),
     ("window", "Set/override the window title/owner hint for this session"),
-    ("speed", "Speed: Normal / Faster / Fast (experimental)"),
+    ("probe", "Measure screen timing (diagnostic -- costs a few real attempts)"),
     ("exit", "Exit"),
 ]
 
@@ -541,14 +559,12 @@ def _dispatch_command(cmd: str, rest: str, session: _SessionState) -> bool:
         max_attempts = state_machine.MAX_ATTEMPTS_DEFAULT
         if is_farm:
             max_attempts = _prompt_max_attempts(state_machine.MAX_ATTEMPTS_DEFAULT)
-        profile = speed.get_profile(session.speed)
         common_kwargs = dict(
             window_title_hint=_resolve_window_hint(session),
             region_config=session.region_config,
-            press_hold=profile.press_hold,
-            post_press_delay=profile.post_press_delay,
-            settle_delay=profile.settle_delay,
-            speed=profile,
+            press_hold=PRESS_HOLD,
+            post_press_delay=POST_PRESS_DELAY,
+            settle_delay=state_machine.RESULT_SETTLE_DELAY,
         )
         _run_with_window_recovery(
             lambda: _run_with_hotkeys(
@@ -564,14 +580,10 @@ def _dispatch_command(cmd: str, rest: str, session: _SessionState) -> bool:
         _list_windows()
     elif cmd in ("8", "package-failure", "bug-report"):
         _run_package_failure()
-    elif cmd == "speed":
-        if rest in speed.PROFILES:  # typed REPL shortcut: "speed fast"
-            session.speed = rest
-            print(f"speed set to {speed.get_profile(rest).label}")
-            if speed.get_profile(rest).experimental:
-                print(tui.warn(_EXPERIMENTAL_SPEED_WARNING))
-        else:
-            _pick_speed(session)
+    elif cmd == "probe":
+        _run_with_window_recovery(
+            lambda: _run_probe(_resolve_window_hint(session), session.region_config), session,
+        )
     elif cmd == "window":
         if not rest:
             print(f"current window hint: {_resolve_window_hint(session)!r}")
@@ -652,6 +664,18 @@ def main() -> None:
         "override the window hint from regions.yaml",
     )
     parser.add_argument(
+        "--probe", action="store_true",
+        help="DIAGNOSTIC: measure how long each screen of the augment cycle takes to appear "
+        "after a key press (saves a csv, a summary and reference screenshots to logs/) and exit. "
+        "Starts from Material Select and costs one real augment attempt per roll -- each is "
+        "rejected afterwards, so the armor is unchanged.",
+    )
+    parser.add_argument(
+        "--probe-rolls", type=int, default=DEFAULT_PROBE_ROLLS, metavar="N",
+        help=f"(--probe only) how many rolls to measure (default {DEFAULT_PROBE_ROLLS}); more "
+        "rolls give a better chance that at least one has skills to time",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="evaluate the roll currently on screen and exit, without accepting/"
@@ -694,43 +718,31 @@ def main() -> None:
     parser.add_argument(
         "--press-hold",
         type=float,
-        default=None,  # None = whatever --speed's profile says (normal: PRESS_HOLD)
-        help=f"seconds to hold each key down (default {PRESS_HOLD}). Low risk to "
-        f"lower -- mainly needs to clear the input system's registration threshold.",
+        default=PRESS_HOLD,
+        help=f"seconds to hold each key down (default {PRESS_HOLD}). Nothing below the "
+        f"default was ever measured, so lowering it is a guess.",
     )
     parser.add_argument(
         "--post-press-delay",
         type=float,
-        default=None,  # None = whatever --speed's profile says (normal: POST_PRESS_DELAY)
+        default=POST_PRESS_DELAY,
         help=f"seconds to wait after each key before the next one (default "
-        f"{POST_PRESS_DELAY}). This is standing in for menu transition time -- "
-        f"cutting it too far risks a later keypress in a macro landing mid-"
-        f"transition on the wrong screen, which fails silently rather than "
-        f"raising. Validate at a low --max-attempts before trusting a lower "
-        f"value for a long run.",
+        f"{POST_PRESS_DELAY}). This is standing in for menu transition time, and the "
+        f"default is already close to the floor: measured with --probe, the game's modals "
+        f"finish appearing 110-205ms after the key (the default plus the key hold is "
+        f"{PRESS_HOLD + POST_PRESS_DELAY:.2f}s). Cutting it risks a later keypress landing "
+        f"mid-transition, which fails silently rather than raising.",
     )
     parser.add_argument(
         "--settle-delay",
         type=float,
-        default=None,  # None = whatever --speed's profile says (normal: RESULT_SETTLE_DELAY)
-        help=f"seconds to wait after a roll lands before the first capture, for "
-        f"the sparkle decoration to fade (default {state_machine.RESULT_SETTLE_DELAY}). "
-        f"Lower-risk to cut than the press delays -- worst case is one extra "
-        f"retry, not a state desync.",
-    )
-    parser.add_argument(
-        "--speed",
-        choices=sorted(speed.PROFILES),
-        default="normal",
-        help="speed preset: 'normal' (the tested defaults), 'safe' (a shorter wait before "
-        "reading each roll -- ~17%% faster, can't desync the game), or 'fast' (EXPERIMENTAL: "
-        "also a shorter delay between key presses -- ~55%% faster, but a key can land "
-        "mid-transition; slows itself down on stray dialogs and switches itself off after 3). "
-        "--press-hold/--post-press-delay/--settle-delay override the preset when given.",
-    )
-    parser.add_argument(
-        "--fast", action="store_true",
-        help="shorthand for --speed fast (EXPERIMENTAL -- see --speed)",
+        default=state_machine.RESULT_SETTLE_DELAY,
+        help=f"seconds to wait after a roll lands before the first capture "
+        f"(default {state_machine.RESULT_SETTLE_DELAY}). DO NOT LOWER THIS: measured with "
+        f"--probe, nothing on screen changes for ~600ms after the final confirm and the "
+        f"results then fade in over ~100ms, so the default already reads within ~30ms of "
+        f"the earliest safe moment. Read any earlier and the bot sees the old screen -- an "
+        f"empty roll, accepted without a retry -- and rejects every roll.",
     )
     args = parser.parse_args()
     configure_tesseract()
@@ -756,6 +768,15 @@ def main() -> None:
             sys.exit(1)
         return
 
+    if args.probe:
+        region_config = ocr.load_region_config()
+        try:
+            sys.exit(_run_probe(args.window or region_config.window_title_hint, region_config, args.probe_rolls))
+        except (capture.WindowNotFoundError, capture.AmbiguousWindowError, capture.ScreenCapturePermissionError) as e:
+            print(f"{e}", file=sys.stderr)
+            print("-- pass --window to override, or run --list-windows to see what's visible", file=sys.stderr)
+            sys.exit(1)
+
     if args.wizard:
         run_wizard()
         return
@@ -763,7 +784,7 @@ def main() -> None:
     if not args.goal:
         parser.error(
             "one of --goal, --wizard, --selfcheck, --list-windows, "
-            "--calibrate, or --package-failure is required"
+            "--calibrate, --probe, or --package-failure is required"
         )
 
     try:
@@ -773,14 +794,12 @@ def main() -> None:
         sys.exit(2)
     region_config = ocr.load_region_config()
 
-    profile = speed.get_profile("fast" if args.fast else args.speed)
     common_kwargs = dict(
         window_title_hint=args.window,
         region_config=region_config,
-        press_hold=args.press_hold if args.press_hold is not None else profile.press_hold,
-        post_press_delay=args.post_press_delay if args.post_press_delay is not None else profile.post_press_delay,
-        settle_delay=args.settle_delay if args.settle_delay is not None else profile.settle_delay,
-        speed=profile,
+        press_hold=args.press_hold,
+        post_press_delay=args.post_press_delay,
+        settle_delay=args.settle_delay,
     )
 
     try:
@@ -807,13 +826,7 @@ def _execute(goal, dry_run: bool, max_attempts: int, should_stop, **common_kwarg
     itself, so both main()'s argparse path (which does, for scripting)
     and the interactive menu (which just prints and loops back to the
     menu afterward) can share this.
-
-    A `speed` entry in common_kwargs (a speed.SpeedProfile) is split out
-    here: a dry-run only uses the timings already carried alongside it,
-    while a real run also hands the profile's label and the normal timings
-    to state_machine.run for its guard-rails (see FAST_REVERT_AFTER_DIALOGS).
     """
-    profile = common_kwargs.pop("speed", None)
     if dry_run:
         log = AttemptLogger(goal=goal)
         try:
@@ -825,12 +838,6 @@ def _execute(goal, dry_run: bool, max_attempts: int, should_stop, **common_kwarg
             print(f"Full step-by-step trace: {log._debug_path}", file=sys.stderr)
             return 2
         return 0 if decision.accepted else 1
-
-    if profile is not None and profile.key != speed.NORMAL.key:
-        common_kwargs["speed_label"] = profile.label
-        common_kwargs["fallback_timing"] = speed.NORMAL.timings
-        if profile.experimental:
-            print(tui.warn(_EXPERIMENTAL_SPEED_WARNING))
 
     try:
         result = state_machine.run(

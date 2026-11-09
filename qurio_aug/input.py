@@ -80,15 +80,10 @@ class GameInput:
                  post_press_delay: float = POST_PRESS_DELAY,
                  press_hold: float = PRESS_HOLD,
                  mouse: MouseController | None = None,
-                 should_stop: Callable[[], bool] | None = None,
-                 max_post_press_delay: float | None = None):
+                 should_stop: Callable[[], bool] | None = None):
         self._controller = controller or Controller()
         self._post_press_delay = post_press_delay
         self._base_post_press_delay = post_press_delay
-        # Ceiling for slow_down(). Defaults to MAX_SLOWDOWN_FACTOR x the
-        # starting delay; a fast run passes the *normal* delay here so it
-        # can climb back to the tested speed but never past it.
-        self._max_post_press_delay = max_post_press_delay
         self._press_hold = press_hold
         self._mouse = mouse or MouseController()
         # Checked before every keypress -- the finest-grained point to
@@ -102,31 +97,17 @@ class GameInput:
         return self._post_press_delay
 
     def slow_down(self) -> tuple[float, float] | None:
-        """Raises the post-press delay by SLOWDOWN_STEP, up to the cap:
-        max_post_press_delay if one was given, else MAX_SLOWDOWN_FACTOR x
-        the delay it was created with. Returns (old, new), or None if it's
-        already at the cap (or the base delay is 0, which a user can set
-        deliberately).
+        """Raises the post-press delay by SLOWDOWN_STEP, up to
+        MAX_SLOWDOWN_FACTOR x the delay it was created with. Returns
+        (old, new), or None if it's already at the cap (or the base delay is
+        0, which a user can set deliberately).
         """
-        cap = (
-            self._max_post_press_delay
-            if self._max_post_press_delay is not None
-            else self._base_post_press_delay * MAX_SLOWDOWN_FACTOR
-        )
+        cap = self._base_post_press_delay * MAX_SLOWDOWN_FACTOR
         old = self._post_press_delay
         if old >= cap:
             return None
         self._post_press_delay = min(cap, old * SLOWDOWN_STEP)
         return old, self._post_press_delay
-
-    def set_timing(self, press_hold: float, post_press_delay: float) -> None:
-        """Replaces the key timings outright -- used to drop a fast run back
-        to normal. The slowdown cap follows the new delay.
-        """
-        self._press_hold = press_hold
-        self._post_press_delay = post_press_delay
-        self._base_post_press_delay = post_press_delay
-        self._max_post_press_delay = None
 
     def park_mouse(self, window_bounds: tuple[float, float, float, float]) -> None:
         """Move the cursor to a safe corner of the game window, clear of

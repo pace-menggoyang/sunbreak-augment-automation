@@ -6,7 +6,56 @@ project doesn't yet follow strict semantic versioning (it's still beta).
 
 ## [Unreleased]
 
+Hotfix for v0.1.6-beta. **If you are on v0.1.6-beta, upgrade -- or at least
+pick Speed -> Normal**: its "Faster" and "Fast" speed presets make the bot
+reject every roll.
+
+- Fix: the speed presets are removed. "Faster" cut the wait before the first
+  screenshot from 0.5s to 0.2s on the reasoning that an unfaded sparkle only
+  triggers a re-read -- true for an *unreadable* row, but wrong for a screen
+  that has not changed yet. Measured with the new `--probe` over 12 rolls:
+  after the final confirm **nothing on screen changes for ~600ms**, then the
+  results fade in and are readable by 674-728ms. At 0.2s the bot read at
+  ~450ms, saw the *old* screen, read it as an empty roll (a legitimate
+  result, ~17% of rolls, accepted without a retry) and rejected it: ~5,300
+  attempts across several beta sessions were rejected unnoticed, spending
+  materials, while the same goal at the normal 0.5s found a skill on
+  attempt 30. (An earlier note blamed "skill rows not drawn yet"; the probe
+  shows nothing at all had been drawn.) "Fast" also cut the key delay to
+  0.12s, below the 110-205ms the game's modals take to appear, and a beta
+  tester found it too fast right where a modal is about to show. Normal is
+  already within ~30ms of the earliest safe read and ~30ms of the modals'
+  appearance time, and the game's own animation is ~95% of an attempt, so
+  the most any delay tuning could still save is ~5% -- there is no preset.
+  `--speed`, `--fast` and the menu's Speed entry are gone. `--press-hold`,
+  `--post-press-delay` and `--settle-delay` remain; their help now says what
+  was measured, and `--settle-delay` is marked "do not lower". A test pins the
+  default against the probed timings.
+- Feature: an empty-roll safety net. About 1 in 6 rolls is genuinely empty,
+  so a long unbroken streak means the bot can't see the game. A run now warns
+  after 30 empty rolls in a row and stops at 100, before the next reroll
+  spends more materials (`BlankStreakError`, reported like an unreadable
+  roll). The end-of-run summary also shows the share of empty rolls, flagged
+  when it is far above normal.
+- Feature: `--probe` (also the menu's `probe` entry), a timing diagnostic. From
+  Material Select it runs a few rolls of the bot's own key sequence and
+  screenshots every ~50ms after each key press, recording when each screen
+  settles and when the skill rows finish drawing (judged by when that area
+  stops changing, not by whether it has bright content, since the constant
+  "Skills" header sits in the same box). It writes a summary, a per-frame CSV
+  and one reference screenshot per screen to `logs/`. Each roll is a real
+  attempt that is rejected afterwards (armor unchanged). It is what the
+  findings above came from, and what a future "wait until the next screen is
+  really there" check would be built from.
+- Fix: the unresolved-indicator screenshots (`indicator_unresolved_*`) now get
+  unique filenames -- they were stamped to the millisecond, so two saved in
+  the same millisecond overwrote each other (caught by a macOS CI failure).
+  `package-failure` now bundles the newest two.
+
 ## [0.1.6-beta] -- 2026-11-09
+
+**Known issue (fixed in the next release):** the *Faster* and *Fast* speed
+presets below read every roll as empty -- use Speed -> Normal.
 
 Fixes for every unreadable-roll failure found in a Windows beta tester's
 logs (157 runs, ~158,000 attempts, 35 runs that ended on an
